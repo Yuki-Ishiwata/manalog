@@ -1,0 +1,7 @@
+# Copy to deploy.config.local and set the ManaLog-specific destination.
+# Keep the subdomain document root pointed at DEPLOY_ROOT/public.
+DEPLOY_SSH_HOST=""
+DEPLOY_SSH_USER=""
+DEPLOY_SSH_PORT="10022"
+DEPLOY_SSH_KEY="$HOME/.ssh/xserver_deploy_key"
+DEPLOY_ROOT=""

@@ -26,3 +26,15 @@ PHP標準機能とPDO以外の依存パッケージはありません。アッ�
 - モバイル向けのログイン画面
 
 チャットと画像解析を使うには `.env` に `AI_API_KEY` と利用する `AI_MODEL` を設定してください。設定がない場合は案内を表示します。画像は5MB以下のJPEG・PNG・WebPを受け付け、解析後に一時ファイルを削除します。APIキーはサーバー側だけで使います。
+
+## エックスサーバーへの配置
+
+`deploy.sh` は `../i-yoyaku/deploy_ishiwata.sh` のSSH・rsync方式を参考にしています。初回の接続先と配置先は推測せず、`deploy.config.local` に設定します。
+
+1. `deploy.config.example` を `deploy.config.local` にコピーし、ManaLog専用のSSH接続先と `DEPLOY_ROOT` を入力します。
+2. サブドメインの公開ディレクトリを `DEPLOY_ROOT/public` に設定します。
+3. サーバーに `DEPLOY_ROOT/.env` を別途作成します。このファイルと画像・ログはデプロイで転送しません。
+4. `./deploy.sh --dry-run` で転送予定を確認し、`./deploy.sh --apply` で転送します。初回の空ディレクトリには `--apply` が必要です。
+5. SQLマイグレーションは内容を確認し、専用DBに別途適用します。スクリプトはDBを変更しません。
+
+転送するのは `public/`、`src/`、`database/migrations/` のみです。既存サイトや別DBには触れません。古いリモートファイルを自動削除しないため、不要ファイルが出た場合は個別に確認して削除してください。

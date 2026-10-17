@@ -6,3 +6,4 @@
 !/storage/logs/.gitkeep
 /vendor/
 .DS_Store
+deploy.config.local

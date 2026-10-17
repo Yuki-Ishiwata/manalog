@@ -1,0 +1,19 @@
+{
+  "name": "ishiwata-juku/manalog",
+  "description": "ManaLog learning journal",
+  "license": "proprietary",
+  "type": "project",
+  "require": {
+    "php": "^8.2",
+    "ext-curl": "*",
+    "ext-mbstring": "*",
+    "ext-openssl": "*",
+    "guzzlehttp/guzzle": "^7.9",
+    "minishlink/web-push": "^11.0"
+  },
+  "config": {
+    "allow-plugins": {
+      "php-http/discovery": true
+    }
+  }
+}

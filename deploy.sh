@@ -80,7 +80,7 @@ else
     echo 'The server-side .env file does not exist at DEPLOY_ENV_FILE.' >&2
     exit 1
   }
-  ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "mkdir -p '${DEPLOY_ROOT}/src' '${DEPLOY_ROOT}/database/migrations' '${DEPLOY_ROOT}/storage/uploads' '${DEPLOY_ROOT}/storage/logs' '${DEPLOY_PUBLIC_ROOT}'"
+  ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "mkdir -p '${DEPLOY_ROOT}/src' '${DEPLOY_ROOT}/database/migrations' '${DEPLOY_ROOT}/bin' '${DEPLOY_ROOT}/vendor' '${DEPLOY_ROOT}/storage/uploads' '${DEPLOY_ROOT}/storage/logs' '${DEPLOY_PUBLIC_ROOT}'"
   if [[ "$DEPLOY_ENV_FILE" != "$DEPLOY_ROOT/.env" ]]; then
     ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "if test -e '${DEPLOY_ROOT}/.env' || test -L '${DEPLOY_ROOT}/.env'; then test -L '${DEPLOY_ROOT}/.env' && test \"\$(readlink '${DEPLOY_ROOT}/.env')\" = '${DEPLOY_ENV_FILE}'; else ln -s '${DEPLOY_ENV_FILE}' '${DEPLOY_ROOT}/.env'; fi" || {
       echo 'Could not link DEPLOY_ROOT/.env to DEPLOY_ENV_FILE.' >&2
@@ -89,7 +89,7 @@ else
   fi
 fi
 
-for PART in src database/migrations; do
+for PART in src database/migrations bin vendor; do
   echo "Syncing ${PART}/"
   if [[ "$MODE" == '--dry-run' && "$FIRST_DEPLOY" == true ]]; then
     echo "Would create ${DEPLOY_ROOT}/${PART}/ and upload its files."
@@ -100,6 +100,10 @@ for PART in src database/migrations; do
       "${SSH_TARGET}:${DEPLOY_ROOT}/${PART}/"
   fi
 done
+echo 'Syncing Composer manifests'
+rsync "${RSYNC_ARGS[@]}" -e "$RSYNC_SSH" \
+  "${PROJECT_ROOT}/composer.json" "${PROJECT_ROOT}/composer.lock" \
+  "${SSH_TARGET}:${DEPLOY_ROOT}/"
 echo 'Syncing public/'
 rsync "${RSYNC_ARGS[@]}" -e "$RSYNC_SSH" \
   "${PROJECT_ROOT}/public/" \

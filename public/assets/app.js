@@ -64,7 +64,7 @@
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || '送信できませんでした。');
       addBubble('theirs', result.reply);
-      title.textContent = '今日の振り返り' + (result.progress ? ' · ' + result.progress : '');
+      title.textContent = (result.title || '今日の振り返り') + (result.progress ? ' · ' + result.progress : '');
       if (result.ended) {
         stopVoice();
         form.hidden = true;

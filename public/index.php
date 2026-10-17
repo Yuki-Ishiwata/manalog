@@ -329,4 +329,4 @@ if ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'
     </section>
   <?php endif; ?>
   <footer>石渡塾 学習記録</footer>
-</main><script src="assets/app.js" defer></script></body></html>
+</main><script src="assets/app.js?v=20261017-voice-errors" defer></script></body></html>

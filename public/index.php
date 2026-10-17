@@ -180,7 +180,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                     foreach (['after_school', 'night'] as $type) {
                         if (!is_string($row[$type] ?? '')) throw new RuntimeException('通知時刻の入力内容を確認してください。');
                         $time = trim((string)($row[$type] ?? ''));
-                        if ($time !== '' && !preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/', $time)) throw new RuntimeException('時刻は24時間表記で入力してください。');
+                        $timePattern = $type === 'night' ? '/^(?:[01]\d|2[0-9]):[0-5]\d$/' : '/^(?:[01]\d|2[0-3]):[0-5]\d$/';
+                        if ($time !== '' && !preg_match($timePattern, $time)) throw new RuntimeException('帰宅後は00:00〜23:59、夜は00:00〜29:59で入力してください。');
                         $schedule[$day][$type] = $time === '' ? null : $time . ':00';
                     }
                 }
@@ -416,7 +417,7 @@ if ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'
     }
 }
 ?><!doctype html>
-<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#f5f7f4"><title>まなログ</title><link rel="stylesheet" href="assets/app.css"><link rel="stylesheet" href="assets/chat.css?v=20261017-timetable-delete"></head>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#f5f7f4"><title>まなログ</title><link rel="stylesheet" href="assets/app.css"><link rel="stylesheet" href="assets/chat.css?v=20261017-overnight-time"></head>
 <body><main class="shell">
   <header class="brand"><span class="brand-mark">学</span><div><h1>まなログ</h1><p>今日の学びを、少しずつ。</p></div></header>
   <?php if (isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'): ?>
@@ -457,7 +458,21 @@ if ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'
       <?php if ($chatSessions): ?><details class="profile-edit"><summary>会話履歴</summary><?php foreach ($chatSessions as $chatSession): ?><a class="history-link" href="?session=<?= (int)$chatSession['id'] ?>"><strong><?= h($chatSession['session_date']) ?></strong><span><?= h($chatSession['last_message'] ?: '会話を開始') ?></span></a><?php endforeach; ?></details><?php endif; ?>
       <details class="profile-edit"><summary>時間割を登録・編集</summary><p class="muted">写真から解析するか、科目名を手入力できます。解析結果を確認して保存するまで、今の時間割は変更されません。個人名や学校名が写っている場合は、先に画像から切り取ってください。</p><form method="post" enctype="multipart/form-data" class="image-upload"><?= csrf_field() ?><input type="hidden" name="action" value="parse_timetable"><label>時間割の画像（5MBまで）<input type="file" name="timetable_image" accept="image/jpeg,image/png,image/webp" required></label><button class="small-button" type="submit">AIで読み取る</button></form><form method="post" class="timetable-form"><?= csrf_field() ?><input type="hidden" name="action" value="save_timetable"><div class="table-scroll"><table class="timetable"><thead><tr><th>限</th><?php foreach ($dayNames as $name): ?><th><?= h($name) ?></th><?php endforeach; ?></tr></thead><tbody><?php for ($period = 1; $period <= 8; $period++): ?><tr><th><?= $period ?></th><?php foreach ($dayNames as $day => $name): ?><td><input aria-label="<?= h($name) ?>曜日 <?= $period ?>限" name="subjects[<?= $day ?>][<?= $period ?>]" value="<?= h($timetableDraft[$day][$period] ?? $timetable[$day][$period] ?? '') ?>" maxlength="100"></td><?php endforeach; ?></tr><?php endfor; ?></tbody></table></div><button class="button" type="submit">時間割を保存</button></form><?php if ($timetable || $timetableDraft): ?><form method="post" class="delete-timetable-form" onsubmit="return confirm('登録済みの時間割をすべて削除します。よろしいですか？');"><?= csrf_field() ?><input type="hidden" name="action" value="delete_timetable"><button class="button danger-button" type="submit">時間割をすべて削除</button></form><?php endif; ?></details>
       <details class="profile-edit"><summary>質問しない教科を設定</summary><p class="muted">道徳など、振り返りで質問しなくてよい教科を1行に1つ入力してください。時間割の教科名と同じ表記にすると、どの曜日でも質問から外れます。</p><form method="post" class="review-settings"><?= csrf_field() ?><input type="hidden" name="action" value="save_review_exclusions"><label for="excluded-subjects">質問しない教科</label><textarea id="excluded-subjects" name="excluded_subjects" rows="4" maxlength="5000" placeholder="道徳&#10;学活"><?= h(($_POST['action'] ?? '') === 'save_review_exclusions' && $error ? ($_POST['excluded_subjects'] ?? '') : implode("\n", $reviewExcludedSubjects)) ?></textarea><button class="button" type="submit">設定を保存</button></form></details>
-      <details class="profile-edit"><summary>通知希望時刻</summary><p class="muted">曜日ごとに帰宅後・夜の時刻を設定できます。空欄は希望なしです。通知機能は将来追加予定で、ここで設定してもまだ通知は送信されません。</p><form method="post" class="notification-form"><?= csrf_field() ?><input type="hidden" name="action" value="save_notifications"><table class="notification-schedule"><thead><tr><th scope="col">曜日</th><th scope="col">帰宅後</th><th scope="col">夜</th></tr></thead><tbody><?php foreach ([1 => '月', 2 => '火', 3 => '水', 4 => '木', 5 => '金', 6 => '土', 7 => '日'] as $day => $name): ?><tr><th scope="row"><?= $name ?></th><?php foreach (['after_school' => 'after_school_time', 'night' => 'night_time'] as $type => $column): ?><?php $postedTime = $_POST['times'][$day][$type] ?? null; $timeValue = ($_POST['action'] ?? '') === 'save_notifications' && $error && is_string($postedTime) ? $postedTime : substr((string)($notificationSchedule[$day][$column] ?? ''), 0, 5); ?><td><input type="time" aria-label="<?= $name ?>曜日 <?= $type === 'after_school' ? '帰宅後' : '夜' ?>" name="times[<?= $day ?>][<?= $type ?>]" value="<?= h($timeValue) ?>"></td><?php endforeach; ?></tr><?php endforeach; ?></tbody></table><button class="button" type="submit">通知時刻を保存</button></form></details>
+      <details class="profile-edit"><summary>通知希望時刻</summary>
+        <p class="muted">曜日ごとに帰宅後・夜の時刻を設定できます。空欄は希望なしです。夜は24:00〜29:59も入力でき、たとえば水曜25:00は木曜午前1時です。水曜01:00は水曜の早朝です。通知はまだ送信されません。</p>
+        <form method="post" class="notification-form"><?= csrf_field() ?><input type="hidden" name="action" value="save_notifications">
+          <table class="notification-schedule"><thead><tr><th scope="col">曜日</th><th scope="col">帰宅後</th><th scope="col">夜</th></tr></thead><tbody>
+            <?php foreach ([1 => '月', 2 => '火', 3 => '水', 4 => '木', 5 => '金', 6 => '土', 7 => '日'] as $day => $name): ?>
+              <tr><th scope="row"><?= $name ?></th>
+                <?php foreach (['after_school' => 'after_school_time', 'night' => 'night_time'] as $type => $column): ?>
+                  <?php $postedTime = $_POST['times'][$day][$type] ?? null; $timeValue = ($_POST['action'] ?? '') === 'save_notifications' && $error && is_string($postedTime) ? $postedTime : substr((string)($notificationSchedule[$day][$column] ?? ''), 0, 5); ?>
+                  <td><input type="<?= $type === 'night' ? 'text' : 'time' ?>" <?= $type === 'night' ? 'maxlength="5" placeholder="25:00"' : '' ?> aria-label="<?= $name ?>曜日 <?= $type === 'after_school' ? '帰宅後' : '夜' ?>" name="times[<?= $day ?>][<?= $type ?>]" value="<?= h($timeValue) ?>"></td>
+                <?php endforeach; ?>
+              </tr>
+            <?php endforeach; ?>
+          </tbody></table><button class="button" type="submit">通知時刻を保存</button>
+        </form>
+      </details>
       <details class="profile-edit"><summary>プロフィールを編集</summary><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="save_profile"><label>表示名<input name="display_name" value="<?= h($profile['display_name'] ?? '') ?>" required maxlength="100"></label><label>学校名<input name="school_name" value="<?= h($profile['school_name'] ?? '') ?>" maxlength="150"></label><label>学年<input name="grade" value="<?= h($profile['grade'] ?? '') ?>" maxlength="40"></label><button class="button" type="submit">保存</button></form></details><a class="button secondary" href="?logout=1">ログアウト</a>
     </section>
   <?php elseif (!$pdo): ?>

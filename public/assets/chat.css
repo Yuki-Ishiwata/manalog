@@ -3,5 +3,5 @@
 .bubble{white-space:pre-line}
 [hidden]{display:none!important}
 .review-settings textarea{width:100%;resize:vertical;border:1px solid #d6dfd8;border-radius:12px;padding:12px;font:inherit;font-size:16px}
-.notification-form{gap:12px}.notification-schedule{width:100%;border-collapse:collapse;table-layout:fixed}.notification-schedule th,.notification-schedule td{padding:7px 3px;text-align:center;border-bottom:1px solid #e4eae4}.notification-schedule th:first-child{width:45px}.notification-schedule input[type=time]{min-width:0;width:100%;height:42px;padding:0 5px;font-size:14px}
+.notification-form{gap:12px}.notification-schedule{width:100%;border-collapse:collapse;table-layout:fixed}.notification-schedule th,.notification-schedule td{padding:7px 3px;text-align:center;border-bottom:1px solid #e4eae4}.notification-schedule th:first-child{width:45px}.notification-schedule input[type=time],.notification-schedule input[type=text]{min-width:0;width:100%;height:42px;padding:0 5px;font-size:14px}
 .delete-timetable-form{margin-top:12px}.danger-button{background:#fff1ee;color:#a23e2c;border:1px solid #e8b5aa}

@@ -178,6 +178,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                 $stmt = $pdo->prepare('UPDATE notification_preferences SET after_school_time = ?, night_time = ? WHERE student_id = ?');
                 $stmt->execute([$after !== '' ? $after . ':00' : null, $night !== '' ? $night . ':00' : null, (int)$_SESSION['user_id']]);
                 $notice = '通知希望時刻を保存しました。Phase 1では通知は送信されません。';
+            } elseif (($_SESSION['role'] ?? '') === 'student' && $action === 'save_review_exclusions') {
+                if (!is_string($_POST['excluded_subjects'] ?? '')) throw new RuntimeException('教科名を確認してください。');
+                $raw = (string)($_POST['excluded_subjects'] ?? '');
+                if (mb_strlen($raw) > 5000) throw new RuntimeException('対象外の教科は30件以内で入力してください。');
+                $subjects = array_values(array_unique(array_filter(array_map('trim', preg_split('/\r\n|\r|\n/u', $raw) ?: []), static fn($subject) => $subject !== '')));
+                if (count($subjects) > 30) throw new RuntimeException('対象外の教科は30件以内で入力してください。');
+                foreach ($subjects as $subject) if (mb_strlen($subject) > 100) throw new RuntimeException('教科名は100文字以内で入力してください。');
+                $pdo->beginTransaction();
+                $studentId = (int)$_SESSION['user_id'];
+                $pdo->prepare('DELETE FROM review_excluded_subjects WHERE student_id = ?')->execute([$studentId]);
+                $insert = $pdo->prepare('INSERT IGNORE INTO review_excluded_subjects (student_id, subject) VALUES (?, ?)');
+                foreach ($subjects as $subject) $insert->execute([$studentId, $subject]);
+                $pdo->commit();
+                $notice = '質問しない教科を保存しました。次に始める振り返りから反映されます。';
             } elseif (($_SESSION['role'] ?? '') === 'student' && $action === 'save_timetable') {
                 $subjects = $_POST['subjects'] ?? [];
                 if (!is_array($subjects)) throw new RuntimeException('時間割の入力内容を確認してください。');
@@ -228,7 +242,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                 $now = new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo'));
                 $stmt = $pdo->prepare('SELECT e.period_number, e.subject FROM timetables t JOIN timetable_entries e ON e.timetable_id = t.id WHERE t.student_id = ? AND t.is_active = 1 AND e.day_of_week = ? ORDER BY e.period_number');
                 $stmt->execute([$studentId, (int)$now->format('N')]);
-                $subjects = $stmt->fetchAll();
+                $scheduledSubjects = $stmt->fetchAll();
+                $stmt = $pdo->prepare('SELECT subject FROM review_excluded_subjects WHERE student_id = ?');
+                $stmt->execute([$studentId]);
+                $excluded = array_fill_keys($stmt->fetchAll(PDO::FETCH_COLUMN), true);
+                $subjects = array_values(array_filter($scheduledSubjects, static fn($subject) => !isset($excluded[$subject['subject']])));
+                if ($scheduledSubjects && !$subjects) throw new RuntimeException('今日の教科はすべて質問しない設定です。設定を変更すると振り返りを始められます。');
                 $pdo->beginTransaction();
                 $stmt = $pdo->prepare('INSERT INTO chat_sessions (student_id, session_date, session_type, questions_per_subject) VALUES (?, ?, ?, ?)');
                 $stmt->execute([$studentId, $now->format('Y-m-d'), $subjects ? 'after_school' : 'general', $subjects ? 2 : 1]);
@@ -325,6 +344,7 @@ if ($pdo) { try { $isFirst = (int)$pdo->query('SELECT COUNT(*) FROM users')->fet
 $students = [];
 $profile = null;
 $timetable = [];
+$reviewExcludedSubjects = [];
 $preferences = ['after_school_time' => '', 'night_time' => ''];
 $chatSessions = [];
 $chatMessages = [];
@@ -346,6 +366,9 @@ if ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'
         $stmt->execute([$timetableId]);
         foreach ($stmt->fetchAll() as $entry) $timetable[(int)$entry['day_of_week']][(int)$entry['period_number']] = $entry['subject'];
     }
+    $stmt = $pdo->prepare('SELECT subject FROM review_excluded_subjects WHERE student_id = ? ORDER BY subject');
+    $stmt->execute([(int)$_SESSION['user_id']]);
+    $reviewExcludedSubjects = $stmt->fetchAll(PDO::FETCH_COLUMN);
     $stmt = $pdo->prepare('SELECT after_school_time, night_time FROM notification_preferences WHERE student_id = ?');
     $stmt->execute([(int)$_SESSION['user_id']]);
     $preferences = $stmt->fetch() ?: $preferences;
@@ -375,7 +398,7 @@ if ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'
     }
 }
 ?><!doctype html>
-<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#f5f7f4"><title>まなログ</title><link rel="stylesheet" href="assets/app.css"><link rel="stylesheet" href="assets/chat.css?v=20261017-conversation-mode"></head>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#f5f7f4"><title>まなログ</title><link rel="stylesheet" href="assets/app.css"><link rel="stylesheet" href="assets/chat.css?v=20261017-exclusions"></head>
 <body><main class="shell">
   <header class="brand"><span class="brand-mark">学</span><div><h1>まなログ</h1><p>今日の学びを、少しずつ。</p></div></header>
   <?php if (isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'): ?>
@@ -397,8 +420,8 @@ if ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'
     </section>
   <?php elseif (isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'student'): ?>
     <section class="card"><p class="eyebrow">生徒ホーム · <?= h((new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo')))->format('Y年n月j日')) ?></p><h2><?= h($profile['display_name'] ?? '') ?>さん、こんにちは</h2><?php if ($error): ?><p class="error"><?= h($error) ?></p><?php endif; ?><?php if ($notice): ?><p class="success"><?= h($notice) ?></p><?php endif; ?>
-      <?php $today = (int)(new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo')))->format('N'); $dayNames = [1 => '月', 2 => '火', 3 => '水', 4 => '木', 5 => '金', 6 => '土']; ?>
-      <div class="today-box"><strong>今日の時間割（<?= $today <= 6 ? h($dayNames[$today]) . '曜日' : '日曜日' ?>）</strong><p><?php $todaySubjects = array_filter($timetable[$today] ?? []); ksort($todaySubjects); echo $todaySubjects ? h(implode('・', array_map(fn($period, $subject) => $period . '時間目 ' . $subject, array_keys($todaySubjects), array_values($todaySubjects)))) : '時間割はまだ登録されていません。'; ?></p></div>
+      <?php $today = (int)(new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo')))->format('N'); $dayNames = [1 => '月', 2 => '火', 3 => '水', 4 => '木', 5 => '金', 6 => '土']; $todaySubjects = array_filter($timetable[$today] ?? []); $todayReviewSubjects = array_filter($todaySubjects, static fn($subject) => !in_array($subject, $reviewExcludedSubjects, true)); ?>
+      <div class="today-box"><strong>今日の時間割（<?= $today <= 6 ? h($dayNames[$today]) . '曜日' : '日曜日' ?>）</strong><p><?php ksort($todaySubjects); echo $todaySubjects ? h(implode('・', array_map(fn($period, $subject) => $period . '時間目 ' . $subject, array_keys($todaySubjects), array_values($todaySubjects)))) : '時間割はまだ登録されていません。'; ?></p></div>
       <?php if ($activeChatId): ?>
         <section class="chat-panel">
           <div class="chat-heading"><h3 id="chat-title">今日の振り返り<?= $subjectProgress ? ' · ' . h($subjectProgress) : '' ?></h3><a href="./">ホーム</a></div>
@@ -411,9 +434,11 @@ if ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'
             </form>
           <?php endif; ?>
         </section>
-      <?php else: ?><form method="post" class="start-chat"><?= csrf_field() ?><input type="hidden" name="action" value="start_chat"><button class="button" type="submit"><?= $todaySubjects ? '教科ごとに振り返る' : '振り返りを始める' ?></button></form><?php endif; ?>
+      <?php elseif ($todaySubjects && !$todayReviewSubjects): ?><p class="muted">今日の教科はすべて「質問しない教科」に設定されています。</p>
+      <?php else: ?><form method="post" class="start-chat"><?= csrf_field() ?><input type="hidden" name="action" value="start_chat"><button class="button" type="submit"><?= $todayReviewSubjects ? '教科ごとに振り返る' : '振り返りを始める' ?></button></form><?php endif; ?>
       <?php if ($chatSessions): ?><details class="profile-edit"><summary>会話履歴</summary><?php foreach ($chatSessions as $chatSession): ?><a class="history-link" href="?session=<?= (int)$chatSession['id'] ?>"><strong><?= h($chatSession['session_date']) ?></strong><span><?= h($chatSession['last_message'] ?: '会話を開始') ?></span></a><?php endforeach; ?></details><?php endif; ?>
       <details class="profile-edit"><summary>時間割を登録・編集</summary><p class="muted">写真から解析するか、科目名を手入力できます。解析結果を確認して保存するまで、今の時間割は変更されません。個人名や学校名が写っている場合は、先に画像から切り取ってください。</p><form method="post" enctype="multipart/form-data" class="image-upload"><?= csrf_field() ?><input type="hidden" name="action" value="parse_timetable"><label>時間割の画像（5MBまで）<input type="file" name="timetable_image" accept="image/jpeg,image/png,image/webp" required></label><button class="small-button" type="submit">AIで読み取る</button></form><form method="post" class="timetable-form"><?= csrf_field() ?><input type="hidden" name="action" value="save_timetable"><div class="table-scroll"><table class="timetable"><thead><tr><th>限</th><?php foreach ($dayNames as $name): ?><th><?= h($name) ?></th><?php endforeach; ?></tr></thead><tbody><?php for ($period = 1; $period <= 8; $period++): ?><tr><th><?= $period ?></th><?php foreach ($dayNames as $day => $name): ?><td><input aria-label="<?= h($name) ?>曜日 <?= $period ?>限" name="subjects[<?= $day ?>][<?= $period ?>]" value="<?= h($timetableDraft[$day][$period] ?? $timetable[$day][$period] ?? '') ?>" maxlength="100"></td><?php endforeach; ?></tr><?php endfor; ?></tbody></table></div><button class="button" type="submit">時間割を保存</button></form></details>
+      <details class="profile-edit"><summary>質問しない教科を設定</summary><p class="muted">道徳など、振り返りで質問しなくてよい教科を1行に1つ入力してください。時間割の教科名と同じ表記にすると、どの曜日でも質問から外れます。</p><form method="post" class="review-settings"><?= csrf_field() ?><input type="hidden" name="action" value="save_review_exclusions"><label for="excluded-subjects">質問しない教科</label><textarea id="excluded-subjects" name="excluded_subjects" rows="4" maxlength="5000" placeholder="道徳&#10;学活"><?= h(($_POST['action'] ?? '') === 'save_review_exclusions' && $error ? ($_POST['excluded_subjects'] ?? '') : implode("\n", $reviewExcludedSubjects)) ?></textarea><button class="button" type="submit">設定を保存</button></form></details>
       <details class="profile-edit"><summary>通知希望時刻</summary><p class="muted">通知機能は将来追加予定です。ここで設定しても通知は送信されません。</p><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="save_notifications"><label>帰宅後<input type="time" name="after_school_time" value="<?= h(substr((string)$preferences['after_school_time'], 0, 5)) ?>"></label><label>夜<input type="time" name="night_time" value="<?= h(substr((string)$preferences['night_time'], 0, 5)) ?>"></label><button class="button" type="submit">通知時刻を保存</button></form></details>
       <details class="profile-edit"><summary>プロフィールを編集</summary><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="save_profile"><label>表示名<input name="display_name" value="<?= h($profile['display_name'] ?? '') ?>" required maxlength="100"></label><label>学校名<input name="school_name" value="<?= h($profile['school_name'] ?? '') ?>" maxlength="150"></label><label>学年<input name="grade" value="<?= h($profile['grade'] ?? '') ?>" maxlength="40"></label><button class="button" type="submit">保存</button></form></details><a class="button secondary" href="?logout=1">ログアウト</a>
     </section>

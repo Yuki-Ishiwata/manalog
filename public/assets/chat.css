@@ -2,3 +2,4 @@
 
 .bubble{white-space:pre-line}
 [hidden]{display:none!important}
+.review-settings textarea{width:100%;resize:vertical;border:1px solid #d6dfd8;border-radius:12px;padding:12px;font:inherit;font-size:16px}

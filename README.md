@@ -34,7 +34,7 @@ PHP標準機能とPDO以外の依存パッケージはありません。アッ�
 1. `deploy.config.example` を `deploy.config.local` にコピーし、SSH接続先、公開領域外の `DEPLOY_ROOT`、サブドメインのドキュメントルート `DEPLOY_PUBLIC_ROOT`、サーバー側の `DEPLOY_ENV_FILE` を入力します。
 2. エックスサーバーのサブドメイン設定で `DEPLOY_PUBLIC_ROOT` を公開先として選びます。たとえば `.../public_html/manalog/` です。
 3. サーバーに `DEPLOY_ENV_FILE` で指定した `.env` を作成します。別の場所に置いた場合、デプロイ時に `DEPLOY_ROOT/.env` へシンボリックリンクを作成します。このファイルと画像・ログはデプロイで転送しません。
-4. `./deploy.sh --dry-run` で転送予定を確認し、`./deploy.sh --apply` で転送します。初回の空ディレクトリには `--apply` が必要です。
+4. `./deploy.sh --dry-run` で転送予定を確認し、`./deploy.sh --apply` で転送します。初回で `DEPLOY_ROOT` がまだない場合も、dry-run は作成予定と転送ファイルを表示します。
 5. SQLマイグレーションは内容を確認し、専用DBに別途適用します。スクリプトはDBを変更しません。
 
 `public/` の中身は `DEPLOY_PUBLIC_ROOT` に、`src/` と `database/migrations/` は `DEPLOY_ROOT` に転送します。`app_root.local.php` はサーバー上に生成し、公開側からアプリ本体を参照します。既存サイトや別DBには触れません。古いリモートファイルを自動削除しないため、不要ファイルが出た場合は個別に確認して削除してください。

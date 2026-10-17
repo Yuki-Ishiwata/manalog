@@ -64,10 +64,15 @@ RSYNC_ARGS=(-avz --itemize-changes --exclude='.DS_Store' --exclude='.env*' --exc
 if [[ "$MODE" == '--dry-run' ]]; then
   RSYNC_ARGS+=(--dry-run)
   echo "Dry run: ${SSH_TARGET}:${DEPLOY_ROOT}/ and ${DEPLOY_PUBLIC_ROOT}/"
-  ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "test -d '${DEPLOY_ROOT}' && test -d '${DEPLOY_PUBLIC_ROOT}'" || {
-    echo 'A remote directory does not exist yet. Create it or run --apply after confirming both deployment paths.' >&2
+  ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "test -d '${DEPLOY_PUBLIC_ROOT}' && test -f '${DEPLOY_ENV_FILE}'" || {
+    echo 'The subdomain document root or server-side .env does not exist yet.' >&2
     exit 1
   }
+  FIRST_DEPLOY=false
+  if ! ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "test -d '${DEPLOY_ROOT}'"; then
+    FIRST_DEPLOY=true
+    echo 'First deployment: the private app directory does not exist yet.'
+  fi
 else
   echo "Deploying app to: ${SSH_TARGET}:${DEPLOY_ROOT}/"
   echo "Deploying public files to: ${SSH_TARGET}:${DEPLOY_PUBLIC_ROOT}/"
@@ -86,9 +91,14 @@ fi
 
 for PART in src database/migrations; do
   echo "Syncing ${PART}/"
-  rsync "${RSYNC_ARGS[@]}" -e "$RSYNC_SSH" \
-    "${PROJECT_ROOT}/${PART}/" \
-    "${SSH_TARGET}:${DEPLOY_ROOT}/${PART}/"
+  if [[ "$MODE" == '--dry-run' && "$FIRST_DEPLOY" == true ]]; then
+    echo "Would create ${DEPLOY_ROOT}/${PART}/ and upload its files."
+    rg --files --hidden "${PROJECT_ROOT}/${PART}" || true
+  else
+    rsync "${RSYNC_ARGS[@]}" -e "$RSYNC_SSH" \
+      "${PROJECT_ROOT}/${PART}/" \
+      "${SSH_TARGET}:${DEPLOY_ROOT}/${PART}/"
+  fi
 done
 echo 'Syncing public/'
 rsync "${RSYNC_ARGS[@]}" -e "$RSYNC_SSH" \

@@ -77,12 +77,21 @@ if (isset($_GET['logout'])) {
     exit;
 }
 
+$mustChangePassword = false;
+if ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'student') {
+    $stmt = $pdo->prepare("SELECT password_hash FROM users WHERE id = ? AND role = 'student' LIMIT 1");
+    $stmt->execute([(int)$_SESSION['user_id']]);
+    $passwordHash = $stmt->fetchColumn();
+    $mustChangePassword = $passwordHash !== false && password_verify('0000', (string)$passwordHash);
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
     if (!hash_equals($_SESSION['csrf'] ?? '', (string)($_POST['csrf'] ?? ''))) {
         $error = '画面を更新して、もう一度お試しください。';
     } else {
         $action = (string)($_POST['action'] ?? 'login');
         try {
+            if ($mustChangePassword && $action !== 'change_password') throw new RuntimeException('先にパスワードを変更してください。');
             if ($action === 'setup') {
                 if ((int)$pdo->query('SELECT COUNT(*) FROM users')->fetchColumn() !== 0) throw new RuntimeException('初回セットアップは完了しています。');
                 $login = trim((string)($_POST['login_id'] ?? ''));
@@ -102,6 +111,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                 session_regenerate_id(true);
                 $_SESSION['user_id'] = (int)$user['id'];
                 $_SESSION['role'] = $user['role'];
+                header('Location: ./'); exit;
+            } elseif (($_SESSION['role'] ?? '') === 'student' && $action === 'change_password') {
+                if (!$mustChangePassword) throw new RuntimeException('パスワード変更は必要ありません。');
+                $newPassword = (string)($_POST['new_password'] ?? '');
+                if (strlen($newPassword) < 12) throw new RuntimeException('新しいパスワードは12文字以上で入力してください。');
+                if ($newPassword !== (string)($_POST['new_password_confirm'] ?? '')) throw new RuntimeException('確認用パスワードが一致しません。');
+                $stmt = $pdo->prepare("UPDATE users SET password_hash = ? WHERE id = ? AND role = 'student'");
+                $stmt->execute([password_hash($newPassword, PASSWORD_DEFAULT), (int)$_SESSION['user_id']]);
+                session_regenerate_id(true);
                 header('Location: ./'); exit;
             } elseif (($_SESSION['role'] ?? '') === 'admin' && $action === 'create_student') {
                 $login = trim((string)($_POST['login_id'] ?? ''));
@@ -241,7 +259,7 @@ $activeChatId = filter_var($_GET['session'] ?? null, FILTER_VALIDATE_INT) ?: nul
 $timetableDraft = $_SESSION['timetable_draft'] ?? [];
 if ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin') {
     $students = $pdo->query("SELECT u.id, u.login_id, u.status, p.display_name, p.school_name, p.grade FROM users u LEFT JOIN student_profiles p ON p.user_id = u.id WHERE u.role = 'student' ORDER BY u.created_at DESC")->fetchAll();
-} elseif ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'student') {
+} elseif ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'student' && !$mustChangePassword) {
     $stmt = $pdo->prepare('SELECT display_name, school_name, grade FROM student_profiles WHERE user_id = ?');
     $stmt->execute([(int)$_SESSION['user_id']]);
     $profile = $stmt->fetch() ?: ['display_name' => '', 'school_name' => '', 'grade' => ''];
@@ -283,6 +301,12 @@ if ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'
       <h3 class="section-title">登録済み（<?= count($students) ?>名）</h3>
       <?php if (!$students): ?><p class="muted">生徒はまだ登録されていません。</p><?php endif; ?>
       <?php foreach ($students as $student): ?><article class="student-row"><div><strong><?= h($student['display_name'] ?: $student['login_id']) ?></strong><p><?= h($student['login_id']) ?> · <?= h($student['school_name'] ?: '学校未設定') ?> · <?= h($student['grade'] ?: '学年未設定') ?></p><span class="status <?= $student['status'] === 'active' ? 'active' : '' ?>"><?= $student['status'] === 'active' ? '有効' : '無効' ?></span></div><div class="row-actions"><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="toggle_student"><input type="hidden" name="student_id" value="<?= (int)$student['id'] ?>"><button class="small-button" type="submit"><?= $student['status'] === 'active' ? '無効化' : '有効化' ?></button></form><details><summary>PW再発行</summary><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="reset_password"><input type="hidden" name="student_id" value="<?= (int)$student['id'] ?>"><label>新パスワード<input type="password" name="password" minlength="12" required autocomplete="new-password"></label><button class="small-button" type="submit">再設定</button></form></details></div></article><?php endforeach; ?>
+      <a class="button secondary" href="?logout=1">ログアウト</a>
+    </section>
+  <?php elseif (isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'student' && $mustChangePassword): ?>
+    <section class="card"><p class="eyebrow">初回ログイン</p><h2>パスワードを変更</h2><p class="muted">初期パスワード 0000 を変更してください。新しいパスワードは12文字以上で入力します。</p>
+      <?php if ($error): ?><p class="error"><?= h($error) ?></p><?php endif; ?>
+      <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="change_password"><label>新しいパスワード<input type="password" name="new_password" minlength="12" autocomplete="new-password" required></label><label>新しいパスワード（確認）<input type="password" name="new_password_confirm" minlength="12" autocomplete="new-password" required></label><button class="button" type="submit">パスワードを変更</button></form>
       <a class="button secondary" href="?logout=1">ログアウト</a>
     </section>
   <?php elseif (isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'student'): ?>

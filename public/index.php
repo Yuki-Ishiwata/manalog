@@ -1,7 +1,12 @@
 <?php
 declare(strict_types=1);
 
-require dirname(__DIR__) . '/src/bootstrap.php';
+$appRoot = dirname(__DIR__);
+$appRootFile = __DIR__ . '/app_root.local.php';
+if (is_file($appRootFile)) {
+    $appRoot = require $appRootFile;
+}
+require $appRoot . '/src/bootstrap.php';
 
 if (session_status() !== PHP_SESSION_ACTIVE) {
     session_name('manalog_session');
@@ -174,7 +179,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                 $mime = $finfo->file($file['tmp_name']);
                 $allowed = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'];
                 if (!isset($allowed[$mime]) || @getimagesize($file['tmp_name']) === false) throw new RuntimeException('JPEG・PNG・WebPの画像を選択してください。');
-                $uploadDir = dirname(__DIR__) . '/storage/uploads';
+                $uploadDir = $appRoot . '/storage/uploads';
                 if (!is_dir($uploadDir) || !is_writable($uploadDir)) throw new RuntimeException('一時画像の保存先を利用できません。');
                 $temporaryImage = $uploadDir . '/' . bin2hex(random_bytes(20)) . '.' . $allowed[$mime];
                 if (!move_uploaded_file($file['tmp_name'], $temporaryImage)) throw new RuntimeException('画像を一時保存できませんでした。');

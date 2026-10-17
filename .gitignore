@@ -7,3 +7,4 @@
 /vendor/
 .DS_Store
 deploy.config.local
+/public/app_root.local.php

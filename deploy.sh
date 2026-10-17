@@ -34,15 +34,23 @@ source "$CONFIG_FILE"
 : "${DEPLOY_SSH_PORT:?Set DEPLOY_SSH_PORT in deploy.config.local}"
 : "${DEPLOY_SSH_KEY:?Set DEPLOY_SSH_KEY in deploy.config.local}"
 : "${DEPLOY_ROOT:?Set DEPLOY_ROOT in deploy.config.local}"
+: "${DEPLOY_PUBLIC_ROOT:?Set DEPLOY_PUBLIC_ROOT in deploy.config.local}"
 
 [[ "$DEPLOY_SSH_HOST" =~ ^[A-Za-z0-9.-]+$ ]] || { echo 'Invalid DEPLOY_SSH_HOST.' >&2; exit 1; }
 [[ "$DEPLOY_SSH_USER" =~ ^[A-Za-z0-9_-]+$ ]] || { echo 'Invalid DEPLOY_SSH_USER.' >&2; exit 1; }
 [[ "$DEPLOY_SSH_PORT" =~ ^[0-9]+$ ]] || { echo 'Invalid DEPLOY_SSH_PORT.' >&2; exit 1; }
 [[ "$DEPLOY_ROOT" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo 'DEPLOY_ROOT must be a simple absolute path.' >&2; exit 1; }
-case "/${DEPLOY_ROOT#/}/" in
+[[ "$DEPLOY_PUBLIC_ROOT" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo 'DEPLOY_PUBLIC_ROOT must be a simple absolute path.' >&2; exit 1; }
+for ROOT in "$DEPLOY_ROOT" "$DEPLOY_PUBLIC_ROOT"; do
+case "/${ROOT#/}/" in
   *'/../'*|*'/./'*) echo 'DEPLOY_ROOT cannot contain . or .. path segments.' >&2; exit 1 ;;
 esac
-[[ "$DEPLOY_ROOT" != '/' ]] || { echo 'DEPLOY_ROOT cannot be /.' >&2; exit 1; }
+[[ "$ROOT" != '/' ]] || { echo 'Deployment paths cannot be /.' >&2; exit 1; }
+done
+DEPLOY_ROOT="${DEPLOY_ROOT%/}"
+DEPLOY_PUBLIC_ROOT="${DEPLOY_PUBLIC_ROOT%/}"
+[[ "$DEPLOY_ROOT" != *'/public_html/'* && "$DEPLOY_ROOT" != *'/public_html' ]] || { echo 'DEPLOY_ROOT must be outside public_html.' >&2; exit 1; }
+[[ "$DEPLOY_PUBLIC_ROOT" == *'/public_html/'* ]] || { echo 'DEPLOY_PUBLIC_ROOT must be inside public_html.' >&2; exit 1; }
 [[ -f "$DEPLOY_SSH_KEY" ]] || { echo 'SSH key file not found.' >&2; exit 1; }
 
 SSH_TARGET="${DEPLOY_SSH_USER}@${DEPLOY_SSH_HOST}"
@@ -52,25 +60,31 @@ RSYNC_ARGS=(-avz --itemize-changes --exclude='.DS_Store' --exclude='.env*' --exc
 
 if [[ "$MODE" == '--dry-run' ]]; then
   RSYNC_ARGS+=(--dry-run)
-  echo "Dry run: ${SSH_TARGET}:${DEPLOY_ROOT}/"
-  ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "test -d '${DEPLOY_ROOT}'" || {
-    echo 'The remote app directory does not exist yet. Create it or run --apply after confirming DEPLOY_ROOT.' >&2
+  echo "Dry run: ${SSH_TARGET}:${DEPLOY_ROOT}/ and ${DEPLOY_PUBLIC_ROOT}/"
+  ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "test -d '${DEPLOY_ROOT}' && test -d '${DEPLOY_PUBLIC_ROOT}'" || {
+    echo 'A remote directory does not exist yet. Create it or run --apply after confirming both deployment paths.' >&2
     exit 1
   }
 else
-  echo "Deploying to: ${SSH_TARGET}:${DEPLOY_ROOT}/"
-  ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "mkdir -p '${DEPLOY_ROOT}/public' '${DEPLOY_ROOT}/src' '${DEPLOY_ROOT}/database/migrations' '${DEPLOY_ROOT}/storage/uploads' '${DEPLOY_ROOT}/storage/logs'"
+  echo "Deploying app to: ${SSH_TARGET}:${DEPLOY_ROOT}/"
+  echo "Deploying public files to: ${SSH_TARGET}:${DEPLOY_PUBLIC_ROOT}/"
+  ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "mkdir -p '${DEPLOY_ROOT}/src' '${DEPLOY_ROOT}/database/migrations' '${DEPLOY_ROOT}/storage/uploads' '${DEPLOY_ROOT}/storage/logs' '${DEPLOY_PUBLIC_ROOT}'"
 fi
 
-for PART in public src database/migrations; do
+for PART in src database/migrations; do
   echo "Syncing ${PART}/"
   rsync "${RSYNC_ARGS[@]}" -e "$RSYNC_SSH" \
     "${PROJECT_ROOT}/${PART}/" \
     "${SSH_TARGET}:${DEPLOY_ROOT}/${PART}/"
 done
+echo 'Syncing public/'
+rsync "${RSYNC_ARGS[@]}" -e "$RSYNC_SSH" \
+  "${PROJECT_ROOT}/public/" \
+  "${SSH_TARGET}:${DEPLOY_PUBLIC_ROOT}/"
 
 if [[ "$MODE" == '--apply' ]]; then
-  echo 'Files transferred. Configure the subdomain document root to DEPLOY_ROOT/public.'
+  ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "printf '%s\n' '<?php return \"${DEPLOY_ROOT}\";' > '${DEPLOY_PUBLIC_ROOT}/app_root.local.php'"
+  echo 'Files transferred. Keep the subdomain document root at DEPLOY_PUBLIC_ROOT.'
   echo 'Create the server-side DEPLOY_ROOT/.env separately; this script never transfers it.'
   echo 'Apply SQL migrations separately after reviewing them.'
 fi

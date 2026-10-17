@@ -17,14 +17,26 @@ if (session_status() !== PHP_SESSION_ACTIVE) {
 function h(mixed $value): string { return htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
 function csrf_field(): string { return '<input type="hidden" name="csrf" value="' . h($_SESSION['csrf']) . '">'; }
 function subject_question(int $period, string $subject): string { return $period . '時間目の' . $subject . 'は、何を勉強した？'; }
-function ai_reply(array $config, array $context, array $history, string $message, ?array $focus = null): string {
+function subject_progress(int $answered, int $total, int $questionsPerSubject): string {
+    if ($total === 0) return '';
+    if ($answered >= $total * $questionsPerSubject) return $total . '/' . $total . '教科 · 完了';
+    $position = intdiv($answered, $questionsPerSubject) + 1;
+    $question = $answered % $questionsPerSubject + 1;
+    return $position . '/' . $total . '教科' . ($questionsPerSubject > 1 ? ' · 質問' . $question . '/' . $questionsPerSubject : '');
+}
+function ai_reply(array $config, array $context, array $history, string $message, ?array $focus = null, bool $askFollowup = false): string {
     if (empty($config['ai_api_key']) || empty($config['ai_model'])) throw new RuntimeException('AI APIの設定がありません。.envのAI_API_KEYとAI_MODELを設定してください。');
     if (!function_exists('curl_init')) throw new RuntimeException('サーバーでcURLが利用できません。');
     $input = [];
     foreach ($history as $item) $input[] = ['role' => $item['role'] === 'assistant' ? 'assistant' : 'user', 'content' => $item['content']];
     $input[] = ['role' => 'user', 'content' => $message];
     $instructions = 'あなたは日本の塾に通う生徒の学習記録を手伝う聞き役です。問題演習を主導せず、短く自然な日本語で、質問は原則ひとつずつにします。勉強していないことを責めず、不確かな内容を事実と断定しません。1回2〜3分程度で会話を進め、最後に必要なら記録する内容を短く確認します。生徒の学年: ' . ($context['grade'] ?: '未設定') . '。今日の時間割（予定）: ' . ($context['today'] ?: '登録なし') . '。時間割は予定であり、授業を受けたと断定しないでください。';
-    if ($focus) $instructions .= '今回は' . $focus['period_number'] . '時間目の' . $focus['subject'] . 'についての回答だけに、温かく具体的に一文で返してください。次の教科への質問はアプリが表示します。質問や別の教科の話題を追加しないでください。';
+    if ($focus) {
+        $instructions .= '今回は' . $focus['period_number'] . '時間目の' . $focus['subject'] . 'についての回答だけに、短く自然に返してください。';
+        $instructions .= $askFollowup
+            ? '答えを受け止めたあと、その教科で難しかった点や理解できた点を一つだけ質問してください。次の教科の話題は出さないでください。'
+            : '答えを一文で受け止め、質問や別の教科の話題を追加しないでください。';
+    }
     $payload = json_encode(['model' => $config['ai_model'], 'instructions' => $instructions, 'input' => $input, 'max_output_tokens' => 300], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
     $ch = curl_init('https://api.openai.com/v1/responses');
     curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true, CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $config['ai_api_key'], 'Content-Type: application/json'], CURLOPT_POSTFIELDS => $payload, CURLOPT_CONNECTTIMEOUT => 8, CURLOPT_TIMEOUT => 35]);
@@ -86,6 +98,7 @@ if ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'studen
     $passwordHash = $stmt->fetchColumn();
     $mustChangePassword = $passwordHash !== false && password_verify('0000', (string)$passwordHash);
 }
+$isAjaxChat = ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'XMLHttpRequest' && ($_POST['action'] ?? '') === 'send_message';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
     if (!hash_equals($_SESSION['csrf'] ?? '', (string)($_POST['csrf'] ?? ''))) {
@@ -217,8 +230,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                 $stmt->execute([$studentId, (int)$now->format('N')]);
                 $subjects = $stmt->fetchAll();
                 $pdo->beginTransaction();
-                $stmt = $pdo->prepare('INSERT INTO chat_sessions (student_id, session_date, session_type) VALUES (?, ?, ?)');
-                $stmt->execute([$studentId, $now->format('Y-m-d'), $subjects ? 'after_school' : 'general']);
+                $stmt = $pdo->prepare('INSERT INTO chat_sessions (student_id, session_date, session_type, questions_per_subject) VALUES (?, ?, ?, ?)');
+                $stmt->execute([$studentId, $now->format('Y-m-d'), $subjects ? 'after_school' : 'general', $subjects ? 2 : 1]);
                 $sessionId = (int)$pdo->lastInsertId();
                 if ($subjects) {
                     $insertSubject = $pdo->prepare('INSERT INTO chat_session_subjects (session_id, position, period_number, subject) VALUES (?, ?, ?, ?)');
@@ -235,13 +248,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                 $sessionId = filter_var($_POST['session_id'] ?? null, FILTER_VALIDATE_INT);
                 $message = trim((string)($_POST['message'] ?? ''));
                 if (!$sessionId || $message === '' || mb_strlen($message) > 2000) throw new RuntimeException('メッセージを入力してください（2000文字以内）。');
-                $stmt = $pdo->prepare('SELECT id, session_type, ended_at FROM chat_sessions WHERE id = ? AND student_id = ?');
+                $stmt = $pdo->prepare('SELECT id, session_type, questions_per_subject, ended_at FROM chat_sessions WHERE id = ? AND student_id = ?');
                 $stmt->execute([$sessionId, (int)$_SESSION['user_id']]);
                 $chatSession = $stmt->fetch();
                 if (!$chatSession) throw new RuntimeException('この会話を開けません。');
                 if ($chatSession['ended_at']) throw new RuntimeException('この振り返りは終了しています。');
                 $focusSubjects = [];
                 $answeredCount = 0;
+                $questionsPerSubject = max(1, (int)$chatSession['questions_per_subject']);
+                $subjectIndex = 0;
+                $questionPhase = 0;
                 if ($chatSession['session_type'] === 'after_school') {
                     $stmt = $pdo->prepare('SELECT period_number, subject FROM chat_session_subjects WHERE session_id = ? ORDER BY position');
                     $stmt->execute([$sessionId]);
@@ -249,7 +265,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                     $stmt = $pdo->prepare("SELECT COUNT(*) FROM chat_messages WHERE session_id = ? AND role = 'user'");
                     $stmt->execute([$sessionId]);
                     $answeredCount = (int)$stmt->fetchColumn();
-                    if (!isset($focusSubjects[$answeredCount])) throw new RuntimeException('この振り返りは終了しています。');
+                    $subjectIndex = intdiv($answeredCount, $questionsPerSubject);
+                    $questionPhase = $answeredCount % $questionsPerSubject;
+                    if (!isset($focusSubjects[$subjectIndex])) throw new RuntimeException('この振り返りは終了しています。');
                 }
                 $stmt = $pdo->prepare('SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY id DESC LIMIT 12');
                 $stmt->execute([$sessionId]);
@@ -260,23 +278,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                 $today = (int)(new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo')))->format('N');
                 $stmt = $pdo->prepare('SELECT e.subject FROM timetables t JOIN timetable_entries e ON e.timetable_id = t.id WHERE t.student_id = ? AND t.is_active = 1 AND e.day_of_week = ? ORDER BY e.period_number');
                 $stmt->execute([(int)$_SESSION['user_id'], $today]);
-                $reply = ai_reply($config, ['grade' => $grade, 'today' => implode('・', array_column($stmt->fetchAll(), 'subject'))], $history, $message, $focusSubjects[$answeredCount] ?? null);
-                if ($focusSubjects) {
-                    $nextSubject = $focusSubjects[$answeredCount + 1] ?? null;
-                    $reply .= $nextSubject
-                        ? "\n\n" . subject_question((int)$nextSubject['period_number'], (string)$nextSubject['subject'])
-                        : "\n\n今日の振り返りはここまで。話してくれてありがとう。";
-                }
+                $askFollowup = $focusSubjects && $questionPhase < $questionsPerSubject - 1;
+                $reply = ai_reply($config, ['grade' => $grade, 'today' => implode('・', array_column($stmt->fetchAll(), 'subject'))], $history, $message, $focusSubjects[$subjectIndex] ?? null, (bool)$askFollowup);
+                if ($askFollowup && !preg_match('/[?？]/u', $reply)) $reply .= "\n\nこの教科で難しかったところや、もっと知りたいところはある？";
+                $completedSubject = $focusSubjects && !$askFollowup;
+                $nextSubject = $completedSubject ? ($focusSubjects[$subjectIndex + 1] ?? null) : null;
+                $finishedReview = $completedSubject && !$nextSubject;
+                if ($completedSubject) $reply .= $nextSubject
+                    ? "\n\n" . subject_question((int)$nextSubject['period_number'], (string)$nextSubject['subject'])
+                    : "\n\n今日の振り返りはここまで。話してくれてありがとう。";
                 $pdo->beginTransaction();
                 $stmt = $pdo->prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'user', ?)");
                 $stmt->execute([$sessionId, $message]);
                 $stmt = $pdo->prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'assistant', ?)");
                 $stmt->execute([$sessionId, $reply]);
-                if ($focusSubjects && !isset($focusSubjects[$answeredCount + 1])) {
+                if ($finishedReview) {
                     $stmt = $pdo->prepare('UPDATE chat_sessions SET ended_at = CURRENT_TIMESTAMP WHERE id = ?');
                     $stmt->execute([$sessionId]);
                 }
                 $pdo->commit();
+                if ($isAjaxChat) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode(['reply' => $reply, 'ended' => (bool)$finishedReview, 'progress' => subject_progress($answeredCount + 1, count($focusSubjects), $questionsPerSubject)], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+                    exit;
+                }
                 header('Location: ?session=' . $sessionId); exit;
             }
         } catch (PDOException $e) {
@@ -287,6 +312,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
             $error = $e->getMessage();
         }
     }
+}
+if ($isAjaxChat) {
+    http_response_code(422);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['error' => $error ?: '送信できませんでした。もう一度お試しください。'], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+    exit;
 }
 
 $isFirst = false;
@@ -322,7 +353,7 @@ if ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'
     $stmt->execute([(int)$_SESSION['user_id']]);
     $chatSessions = $stmt->fetchAll();
     if ($activeChatId) {
-        $stmt = $pdo->prepare('SELECT id, session_type, ended_at FROM chat_sessions WHERE id = ? AND student_id = ?');
+        $stmt = $pdo->prepare('SELECT id, session_type, questions_per_subject, ended_at FROM chat_sessions WHERE id = ? AND student_id = ?');
         $stmt->execute([$activeChatId, (int)$_SESSION['user_id']]);
         $openedSession = $stmt->fetch();
         if (!$openedSession) $activeChatId = null;
@@ -335,7 +366,7 @@ if ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'
                 $stmt = $pdo->prepare("SELECT COUNT(*) FROM chat_messages WHERE session_id = ? AND role = 'user'");
                 $stmt->execute([$activeChatId]);
                 $answeredSubjects = (int)$stmt->fetchColumn();
-                if ($totalSubjects) $subjectProgress = min($answeredSubjects + 1, $totalSubjects) . '/' . $totalSubjects . '教科';
+                $subjectProgress = subject_progress($answeredSubjects, $totalSubjects, max(1, (int)$openedSession['questions_per_subject']));
             }
             $stmt = $pdo->prepare('SELECT role, content, created_at FROM chat_messages WHERE session_id = ? ORDER BY id');
             $stmt->execute([$activeChatId]);
@@ -344,7 +375,7 @@ if ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'
     }
 }
 ?><!doctype html>
-<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#f5f7f4"><title>まなログ</title><link rel="stylesheet" href="assets/app.css"><link rel="stylesheet" href="assets/chat.css"></head>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#f5f7f4"><title>まなログ</title><link rel="stylesheet" href="assets/app.css"><link rel="stylesheet" href="assets/chat.css?v=20261017-conversation-mode"></head>
 <body><main class="shell">
   <header class="brand"><span class="brand-mark">学</span><div><h1>まなログ</h1><p>今日の学びを、少しずつ。</p></div></header>
   <?php if (isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'): ?>
@@ -368,7 +399,18 @@ if ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'
     <section class="card"><p class="eyebrow">生徒ホーム · <?= h((new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo')))->format('Y年n月j日')) ?></p><h2><?= h($profile['display_name'] ?? '') ?>さん、こんにちは</h2><?php if ($error): ?><p class="error"><?= h($error) ?></p><?php endif; ?><?php if ($notice): ?><p class="success"><?= h($notice) ?></p><?php endif; ?>
       <?php $today = (int)(new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo')))->format('N'); $dayNames = [1 => '月', 2 => '火', 3 => '水', 4 => '木', 5 => '金', 6 => '土']; ?>
       <div class="today-box"><strong>今日の時間割（<?= $today <= 6 ? h($dayNames[$today]) . '曜日' : '日曜日' ?>）</strong><p><?php $todaySubjects = array_filter($timetable[$today] ?? []); ksort($todaySubjects); echo $todaySubjects ? h(implode('・', array_map(fn($period, $subject) => $period . '時間目 ' . $subject, array_keys($todaySubjects), array_values($todaySubjects)))) : '時間割はまだ登録されていません。'; ?></p></div>
-      <?php if ($activeChatId): ?><section class="chat-panel"><div class="chat-heading"><h3>今日の振り返り<?= $subjectProgress ? ' · ' . h($subjectProgress) : '' ?></h3><a href="./">ホーム</a></div><?php if ($error): ?><p class="error"><?= h($error) ?></p><?php endif; ?><div class="messages"><?php foreach ($chatMessages as $chatMessage): ?><div class="bubble <?= $chatMessage['role'] === 'user' ? 'mine' : 'theirs' ?>"><?= nl2br(h($chatMessage['content'])) ?></div><?php endforeach; ?></div><?php if (!$activeChatEnded): ?><form method="post" class="chat-form"><?= csrf_field() ?><input type="hidden" name="action" value="send_message"><input type="hidden" name="session_id" value="<?= (int)$activeChatId ?>"><label class="sr-only" for="chat-message">メッセージ</label><textarea id="chat-message" name="message" maxlength="2000" rows="3" placeholder="話してみよう" required><?= h($_POST['message'] ?? '') ?></textarea><div class="chat-controls"><button class="small-button" id="voice-button" type="button" hidden>🎙 話すと送信</button><span id="voice-status" class="muted" aria-live="polite"></span><button class="button" type="submit">文字で送信</button></div></form><?php endif; ?></section>
+      <?php if ($activeChatId): ?>
+        <section class="chat-panel">
+          <div class="chat-heading"><h3 id="chat-title">今日の振り返り<?= $subjectProgress ? ' · ' . h($subjectProgress) : '' ?></h3><a href="./">ホーム</a></div>
+          <p id="chat-error" class="error" <?= $error ? '' : 'hidden' ?>><?= h($error) ?></p>
+          <div id="chat-messages" class="messages"><?php foreach ($chatMessages as $chatMessage): ?><div class="bubble <?= $chatMessage['role'] === 'user' ? 'mine' : 'theirs' ?>"><?= h($chatMessage['content']) ?></div><?php endforeach; ?></div>
+          <?php if (!$activeChatEnded): ?>
+            <form id="chat-form" method="post" class="chat-form"><?= csrf_field() ?><input type="hidden" name="action" value="send_message"><input type="hidden" name="session_id" value="<?= (int)$activeChatId ?>">
+              <label class="sr-only" for="chat-message">メッセージ</label><textarea id="chat-message" name="message" maxlength="2000" rows="3" placeholder="話してみよう" required><?= h($_POST['message'] ?? '') ?></textarea>
+              <div class="chat-controls"><button class="small-button" id="voice-button" type="button" hidden>🎙 会話モードを開始</button><span id="voice-status" class="muted" aria-live="polite"></span><button class="button" id="send-button" type="submit">文字で送信</button></div>
+            </form>
+          <?php endif; ?>
+        </section>
       <?php else: ?><form method="post" class="start-chat"><?= csrf_field() ?><input type="hidden" name="action" value="start_chat"><button class="button" type="submit"><?= $todaySubjects ? '教科ごとに振り返る' : '振り返りを始める' ?></button></form><?php endif; ?>
       <?php if ($chatSessions): ?><details class="profile-edit"><summary>会話履歴</summary><?php foreach ($chatSessions as $chatSession): ?><a class="history-link" href="?session=<?= (int)$chatSession['id'] ?>"><strong><?= h($chatSession['session_date']) ?></strong><span><?= h($chatSession['last_message'] ?: '会話を開始') ?></span></a><?php endforeach; ?></details><?php endif; ?>
       <details class="profile-edit"><summary>時間割を登録・編集</summary><p class="muted">写真から解析するか、科目名を手入力できます。解析結果を確認して保存するまで、今の時間割は変更されません。個人名や学校名が写っている場合は、先に画像から切り取ってください。</p><form method="post" enctype="multipart/form-data" class="image-upload"><?= csrf_field() ?><input type="hidden" name="action" value="parse_timetable"><label>時間割の画像（5MBまで）<input type="file" name="timetable_image" accept="image/jpeg,image/png,image/webp" required></label><button class="small-button" type="submit">AIで読み取る</button></form><form method="post" class="timetable-form"><?= csrf_field() ?><input type="hidden" name="action" value="save_timetable"><div class="table-scroll"><table class="timetable"><thead><tr><th>限</th><?php foreach ($dayNames as $name): ?><th><?= h($name) ?></th><?php endforeach; ?></tr></thead><tbody><?php for ($period = 1; $period <= 8; $period++): ?><tr><th><?= $period ?></th><?php foreach ($dayNames as $day => $name): ?><td><input aria-label="<?= h($name) ?>曜日 <?= $period ?>限" name="subjects[<?= $day ?>][<?= $period ?>]" value="<?= h($timetableDraft[$day][$period] ?? $timetable[$day][$period] ?? '') ?>" maxlength="100"></td><?php endforeach; ?></tr><?php endfor; ?></tbody></table></div><button class="button" type="submit">時間割を保存</button></form></details>
@@ -384,4 +426,4 @@ if ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'
     </section>
   <?php endif; ?>
   <footer>石渡塾 学習記録</footer>
-</main><script src="assets/app.js?v=20261017-auto-send" defer></script></body></html>
+</main><script src="assets/app.js?v=20261017-conversation-mode" defer></script></body></html>

@@ -41,9 +41,11 @@ source "$CONFIG_FILE"
 [[ "$DEPLOY_SSH_PORT" =~ ^[0-9]+$ ]] || { echo 'Invalid DEPLOY_SSH_PORT.' >&2; exit 1; }
 [[ "$DEPLOY_ROOT" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo 'DEPLOY_ROOT must be a simple absolute path.' >&2; exit 1; }
 [[ "$DEPLOY_PUBLIC_ROOT" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo 'DEPLOY_PUBLIC_ROOT must be a simple absolute path.' >&2; exit 1; }
-for ROOT in "$DEPLOY_ROOT" "$DEPLOY_PUBLIC_ROOT"; do
+DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-${DEPLOY_ROOT%/}/.env}"
+[[ "$DEPLOY_ENV_FILE" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo 'DEPLOY_ENV_FILE must be a simple absolute path.' >&2; exit 1; }
+for ROOT in "$DEPLOY_ROOT" "$DEPLOY_PUBLIC_ROOT" "$DEPLOY_ENV_FILE"; do
 case "/${ROOT#/}/" in
-  *'/../'*|*'/./'*) echo 'DEPLOY_ROOT cannot contain . or .. path segments.' >&2; exit 1 ;;
+  *'/../'*|*'/./'*) echo 'Deployment paths cannot contain . or .. path segments.' >&2; exit 1 ;;
 esac
 [[ "$ROOT" != '/' ]] || { echo 'Deployment paths cannot be /.' >&2; exit 1; }
 done
@@ -51,6 +53,7 @@ DEPLOY_ROOT="${DEPLOY_ROOT%/}"
 DEPLOY_PUBLIC_ROOT="${DEPLOY_PUBLIC_ROOT%/}"
 [[ "$DEPLOY_ROOT" != *'/public_html/'* && "$DEPLOY_ROOT" != *'/public_html' ]] || { echo 'DEPLOY_ROOT must be outside public_html.' >&2; exit 1; }
 [[ "$DEPLOY_PUBLIC_ROOT" == *'/public_html/'* ]] || { echo 'DEPLOY_PUBLIC_ROOT must be inside public_html.' >&2; exit 1; }
+[[ "$DEPLOY_ENV_FILE" != *'/public_html/'* ]] || { echo 'DEPLOY_ENV_FILE must be outside public_html.' >&2; exit 1; }
 [[ -f "$DEPLOY_SSH_KEY" ]] || { echo 'SSH key file not found.' >&2; exit 1; }
 
 SSH_TARGET="${DEPLOY_SSH_USER}@${DEPLOY_SSH_HOST}"
@@ -68,7 +71,17 @@ if [[ "$MODE" == '--dry-run' ]]; then
 else
   echo "Deploying app to: ${SSH_TARGET}:${DEPLOY_ROOT}/"
   echo "Deploying public files to: ${SSH_TARGET}:${DEPLOY_PUBLIC_ROOT}/"
+  ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "test -f '${DEPLOY_ENV_FILE}'" || {
+    echo 'The server-side .env file does not exist at DEPLOY_ENV_FILE.' >&2
+    exit 1
+  }
   ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "mkdir -p '${DEPLOY_ROOT}/src' '${DEPLOY_ROOT}/database/migrations' '${DEPLOY_ROOT}/storage/uploads' '${DEPLOY_ROOT}/storage/logs' '${DEPLOY_PUBLIC_ROOT}'"
+  if [[ "$DEPLOY_ENV_FILE" != "$DEPLOY_ROOT/.env" ]]; then
+    ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "if test -e '${DEPLOY_ROOT}/.env' || test -L '${DEPLOY_ROOT}/.env'; then test -L '${DEPLOY_ROOT}/.env' && test \"\$(readlink '${DEPLOY_ROOT}/.env')\" = '${DEPLOY_ENV_FILE}'; else ln -s '${DEPLOY_ENV_FILE}' '${DEPLOY_ROOT}/.env'; fi" || {
+      echo 'Could not link DEPLOY_ROOT/.env to DEPLOY_ENV_FILE.' >&2
+      exit 1
+    }
+  fi
 fi
 
 for PART in src database/migrations; do
@@ -85,6 +98,6 @@ rsync "${RSYNC_ARGS[@]}" -e "$RSYNC_SSH" \
 if [[ "$MODE" == '--apply' ]]; then
   ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "printf '%s\n' '<?php return \"${DEPLOY_ROOT}\";' > '${DEPLOY_PUBLIC_ROOT}/app_root.local.php'"
   echo 'Files transferred. Keep the subdomain document root at DEPLOY_PUBLIC_ROOT.'
-  echo 'Create the server-side DEPLOY_ROOT/.env separately; this script never transfers it.'
+  echo 'The server-side .env is read from DEPLOY_ENV_FILE; this script never transfers it.'
   echo 'Apply SQL migrations separately after reviewing them.'
 fi

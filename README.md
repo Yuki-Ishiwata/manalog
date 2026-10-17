@@ -5,7 +5,7 @@
 ## 開発環境
 
 1. `.env.example` を `.env` にコピーし、DB設定を入力します。
-2. MySQLに `database/migrations/001_initial_schema.sql`、`002_chat_session_subjects.sql`、`003_subject_review_depth.sql`、`004_review_excluded_subjects.sql` を順に適用します。既存DBは未適用のマイグレーションだけを追加します。
+2. MySQLに `database/migrations/001_initial_schema.sql`、`002_chat_session_subjects.sql`、`003_subject_review_depth.sql`、`004_review_excluded_subjects.sql`、`005_weekday_notification_schedule.sql` を順に適用します。既存DBは未適用のマイグレーションだけを追加します。
 3. Webルートを `public/` に設定します（XAMPPでは `/manalog/public`）。
 4. 管理者ユーザーは初期セットアップ画面から作成します。
 
@@ -19,7 +19,7 @@ PHP標準機能とPDO以外の依存パッケージはありません。アッ�
 - 生徒プロフィールの表示・編集
 - 月〜土・8限までの時間割手入力と今日の時間割表示
 - 時間割画像の検証・一時保存・AI解析・確認後保存
-- 通知希望時刻の保存（通知送信はなし）
+- 月〜日の曜日別・帰宅後／夜の通知希望時刻の保存（通知送信はなし）
 - 会話セッション・履歴の保存と表示、今日の教科を1つずつ各2問で聞く学習振り返り
 - 教科名ごとの「質問しない教科」設定
 - ブラウザ音声認識での文字起こし・自動送信・連続した会話モード、非対応時の手入力

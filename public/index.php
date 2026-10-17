@@ -106,11 +106,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
             } elseif (($_SESSION['role'] ?? '') === 'admin' && $action === 'create_student') {
                 $login = trim((string)($_POST['login_id'] ?? ''));
                 $name = trim((string)($_POST['display_name'] ?? ''));
-                $password = (string)($_POST['password'] ?? '');
-                if ($login === '' || $name === '' || strlen($password) < 12) throw new RuntimeException('ログインID・表示名を入力し、初期パスワードは12文字以上にしてください。');
+                if ($login === '' || $name === '') throw new RuntimeException('ログインID・表示名を入力してください。');
                 $pdo->beginTransaction();
                 $stmt = $pdo->prepare("INSERT INTO users (login_id, password_hash, role) VALUES (?, ?, 'student')");
-                $stmt->execute([$login, password_hash($password, PASSWORD_DEFAULT)]);
+                $stmt->execute([$login, password_hash('0000', PASSWORD_DEFAULT)]);
                 $studentId = (int)$pdo->lastInsertId();
                 $stmt = $pdo->prepare('INSERT INTO student_profiles (user_id, display_name, school_name, grade) VALUES (?, ?, ?, ?)');
                 $stmt->execute([$studentId, $name, trim((string)($_POST['school_name'] ?? '')) ?: null, trim((string)($_POST['grade'] ?? '')) ?: null]);
@@ -279,7 +278,7 @@ if ($pdo && isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'admin'
     <section class="card"><p class="eyebrow">管理者</p><h2>生徒アカウント</h2>
       <?php if ($error): ?><p class="error"><?= h($error) ?></p><?php endif; ?><?php if ($notice): ?><p class="success"><?= h($notice) ?></p><?php endif; ?>
       <form method="post" class="form-grid"><?= csrf_field() ?><input type="hidden" name="action" value="create_student">
-        <h3>生徒を登録</h3><label>ログインID<input name="login_id" required maxlength="100"></label><label>初期パスワード（12文字以上）<input type="password" name="password" required minlength="12" autocomplete="new-password"></label><label>表示名<input name="display_name" required maxlength="100"></label><label>学校名<input name="school_name" maxlength="150"></label><label>学年<input name="grade" maxlength="40" placeholder="例：中学2年"></label><button class="button" type="submit">生徒を登録</button>
+        <h3>生徒を登録</h3><p class="muted">初期パスワードは 0000 です。</p><label>ログインID<input name="login_id" required maxlength="100"></label><label>表示名<input name="display_name" required maxlength="100"></label><label>学校名<input name="school_name" maxlength="150"></label><label>学年<input name="grade" maxlength="40" placeholder="例：中学2年"></label><button class="button" type="submit">生徒を登録</button>
       </form>
       <h3 class="section-title">登録済み（<?= count($students) ?>名）</h3>
       <?php if (!$students): ?><p class="muted">生徒はまだ登録されていません。</p><?php endif; ?>

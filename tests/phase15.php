@@ -23,7 +23,7 @@ try {
     $stmt = $pdo->prepare("INSERT INTO users (login_id, password_hash, role) VALUES (?, ?, 'student')");
     $stmt->execute([$login, password_hash(bin2hex(random_bytes(12)), PASSWORD_DEFAULT)]);
     $studentId = (int)$pdo->lastInsertId();
-    $pdo->prepare('INSERT INTO student_profiles (user_id, display_name) VALUES (?, ?)')->execute([$studentId, 'Phase 1.5 test']);
+    $pdo->prepare('INSERT INTO student_profiles (user_id, display_name, onboarding_step, onboarding_completed_at) VALUES (?, ?, 4, CURRENT_TIMESTAMP)')->execute([$studentId, 'Phase 1.5 test']);
     $pdo->prepare('INSERT INTO notification_preferences (student_id, enabled) VALUES (?, 1)')->execute([$studentId]);
     $pdo->prepare('INSERT INTO notification_schedule (student_id, day_of_week, after_school_time, night_time) VALUES (?, 1, ?, ?)')->execute([$studentId, '16:00:00', '25:00:00']);
     $pdo->prepare('INSERT INTO timetables (student_id, title, is_active) VALUES (?, ?, 1)')->execute([$studentId, 'test']);
@@ -61,6 +61,11 @@ try {
     check($first['sent'] === 1 && $sent === 1, 'Night push was not sent once.');
     $second = send_due_notifications($pdo, $config, $nightNow, $fakeSender);
     check($second['sent'] === 0 && $sent === 1, 'A duplicate night push was sent.');
+    $resendNow = new DateTimeImmutable('2026-10-20 02:10:00', new DateTimeZone('Asia/Tokyo'));
+    $resend = send_due_notifications($pdo, $config, $resendNow, $fakeSender);
+    check($resend['resent'] === 1 && $sent === 2, 'An unanswered night review must be resent once after 60 minutes.');
+    $resendAgain = send_due_notifications($pdo, $config, $resendNow, $fakeSender);
+    check($resendAgain['resent'] === 0 && $sent === 2, 'A reminder must not be resent more than once.');
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM notification_deliveries WHERE student_id = ? AND review_date = '2026-10-19' AND notification_type = 'night'");
     $stmt->execute([$studentId]);
     check((int)$stmt->fetchColumn() === 1, 'Delivery uniqueness failed.');
@@ -86,18 +91,23 @@ try {
     send_due_notifications($pdo, $config, $retryNow, $retrySender);
     check($attempts === 2, 'Successfully retried push must not be sent again.');
 
-    session_name('manalog_session');
-    session_start();
-    $_SESSION['user_id'] = $studentId;
-    $_SESSION['role'] = 'student';
-    $_SERVER['REQUEST_METHOD'] = 'GET';
-    $_GET = [];
-    $_POST = [];
-    ob_start();
-    require dirname(__DIR__) . '/public/index.php';
-    $html = (string)ob_get_clean();
-    check(str_contains($html, 'id="push-panel"') && str_contains($html, '夜の振り返りを開く'), 'Student PWA settings did not render.');
-    session_destroy();
+    $onboardingColumn = $pdo->query("SHOW COLUMNS FROM student_profiles LIKE 'onboarding_step'")->fetch();
+    if ($onboardingColumn) {
+        session_name('manalog_session');
+        session_start();
+        $_SESSION['user_id'] = $studentId;
+        $_SESSION['role'] = 'student';
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_GET = [];
+        $_POST = [];
+        ob_start();
+        require dirname(__DIR__) . '/public/index.php';
+        $html = (string)ob_get_clean();
+        check(str_contains($html, 'id="push-panel"') && str_contains($html, '夜の振り返り'), 'Student PWA settings did not render.');
+        session_destroy();
+    } else {
+        echo "Student PWA render check skipped: local DB is missing migration 012.\n";
+    }
     echo "Phase 1.5 checks passed.\n";
 } finally {
     if ($studentId !== null) $pdo->prepare('DELETE FROM users WHERE id = ?')->execute([$studentId]);

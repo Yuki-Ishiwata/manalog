@@ -9,6 +9,7 @@ $appRoot = dirname(__DIR__);
 $appRootFile = __DIR__ . '/app_root.local.php';
 if (is_file($appRootFile)) $appRoot = require $appRootFile;
 require $appRoot . '/src/bootstrap.php';
+require_once $appRoot . '/src/auth.php';
 
 session_name('manalog_session');
 session_set_cookie_params(['httponly' => true, 'secure' => !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off', 'samesite' => 'Lax', 'path' => '/']);
@@ -29,10 +30,12 @@ if (!is_array($data)) push_response(400, ['error' => '送信内容を確認し�
 try {
     $pdo = db();
     $studentId = (int)$_SESSION['user_id'];
-    $stmt = $pdo->prepare("SELECT password_hash FROM users WHERE id = ? AND role = 'student' AND status = 'active'");
+    $stmt = $pdo->prepare("SELECT password_hash, auth_source FROM users WHERE id = ? AND role = 'student' AND status = 'active'");
     $stmt->execute([$studentId]);
-    $hash = $stmt->fetchColumn();
-    if (!$hash || password_verify('0000', (string)$hash)) push_response(403, ['error' => '先にパスワードを変更してください。']);
+    $account = $stmt->fetch();
+    if (!$account) push_response(403, ['error' => 'アカウントを利用できません。']);
+    if ($account['auth_source'] === 'school' && !auth_revalidate_school_user($pdo, $studentId, $config)) push_response(403, ['error' => '塾の在籍を確認できません。']);
+    if ($account['auth_source'] === 'local' && password_verify('0000', (string)$account['password_hash'])) push_response(403, ['error' => '先にパスワードを変更してください。']);
 
     $action = $data['action'] ?? '';
     $subscription = $data['subscription'] ?? null;
@@ -56,7 +59,7 @@ try {
         $stmt = $pdo->prepare('UPDATE notification_preferences SET enabled = 1 WHERE student_id = ?');
         $stmt->execute([$studentId]);
         $pdo->commit();
-        push_response(200, ['ok' => true]);
+        push_response(200, ['ok' => true, 'push_ready' => true]);
     }
     if ($action === 'unsubscribe') {
         $pdo->beginTransaction();
@@ -65,7 +68,9 @@ try {
         $stmt = $pdo->prepare('UPDATE notification_preferences SET enabled = 0 WHERE student_id = ? AND NOT EXISTS (SELECT 1 FROM push_subscriptions WHERE student_id = ? AND revoked_at IS NULL)');
         $stmt->execute([$studentId, $studentId]);
         $pdo->commit();
-        push_response(200, ['ok' => true]);
+        $stmt = $pdo->prepare('SELECT p.enabled = 1 AND EXISTS (SELECT 1 FROM push_subscriptions s WHERE s.student_id = p.student_id AND s.revoked_at IS NULL) FROM notification_preferences p WHERE p.student_id = ?');
+        $stmt->execute([$studentId]);
+        push_response(200, ['ok' => true, 'push_ready' => (bool)$stmt->fetchColumn()]);
     }
     push_response(400, ['error' => '操作を確認してください。']);
 } catch (Throwable $e) {

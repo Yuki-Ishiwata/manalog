@@ -1,0 +1,115 @@
+.weekly-notification-settings .weekly-review-toggle {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.timetable-photo-card {
+  margin: 12px 0;
+  padding: 14px;
+  border: 1px solid #cbd9ce;
+  border-radius: 14px;
+  background: #f4f8f4;
+}
+
+.timetable-photo-card > strong {
+  color: #315d40;
+}
+
+.timetable-photo-card > p,
+.timetable-missing-note {
+  margin: 6px 0 10px;
+  font-size: 13px;
+}
+
+.timetable-photo-card .image-upload {
+  margin: 10px 0 0;
+}
+
+.no-timetable-option {
+  margin: 12px 0 0;
+}
+
+.no-timetable-option .small-button {
+  min-height: 44px;
+}
+
+.notification-time-control {
+  display: grid;
+  gap: 4px;
+}
+
+.notification-time-control .time-example {
+  color: #718078;
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.notification-time-control .night-next-day {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin: 0;
+  color: #52655a;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.notification-time-control .night-next-day input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin: 0;
+  padding: 0;
+}
+
+.weekly-notification-settings .weekly-review-toggle input {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  margin: 0;
+}
+
+.weekly-notification-settings > label:not(.weekly-review-toggle) {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.notification-copy-tools {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0 14px;
+}
+
+.notification-copy-tools .small-button {
+  min-height: 42px;
+  line-height: 1.4;
+}
+
+.notification-copy-tools .muted {
+  grid-column: 1 / -1;
+  min-height: 0;
+  margin: 0;
+  font-size: 12px;
+}
+
+@media (max-width: 420px) {
+  .weekly-notification-settings {
+    grid-template-columns: 1fr;
+  }
+
+  .weekly-notification-settings .weekly-review-toggle,
+  .weekly-notification-settings p {
+    grid-column: 1;
+  }
+
+  .notification-copy-tools {
+    grid-template-columns: 1fr;
+  }
+}

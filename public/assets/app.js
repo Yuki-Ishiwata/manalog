@@ -1,4 +1,63 @@
 (() => {
+  if ('clearAppBadge' in navigator) navigator.clearAppBadge().catch(() => {});
+
+  // Native POST forms navigate only after the server finishes. Lock the form
+  // immediately and show what is being processed so repeated taps cannot queue.
+  const processingMessages = {
+    parse_timetable: '時間割の写真を解析しています。少し時間がかかります。',
+    start_weekly_review: '今週の記録を確認して、復習を準備しています。',
+    refresh_instructor_summary: '最新の学習記録からサマリーを作成しています。',
+    send_message: 'AIが返事を作成しています。',
+    login: 'ログインしています…',
+    setup: 'アカウントを作成しています…',
+  };
+  document.querySelectorAll('form[method="post" i]').forEach((postForm) => {
+    if (postForm.id === 'chat-form') return;
+    postForm.addEventListener('submit', (event) => {
+      if (event.defaultPrevented || postForm.dataset.submitting === 'true') {
+        event.preventDefault();
+        return;
+      }
+      postForm.dataset.submitting = 'true';
+      const action = postForm.querySelector('input[name="action"]')?.value || '';
+      const submitters = Array.from(postForm.querySelectorAll('button:not([type]), button[type="submit"], input[type="submit"]'));
+      submitters.forEach((submitter) => {
+        submitter.disabled = true;
+        if (submitter instanceof HTMLButtonElement) {
+          submitter.dataset.originalLabel = submitter.textContent;
+          submitter.textContent = '処理中…';
+          submitter.classList.add('is-processing');
+        } else {
+          submitter.dataset.originalLabel = submitter.value;
+          submitter.value = '処理中…';
+          submitter.classList.add('is-processing');
+        }
+      });
+      const statusLine = document.createElement('p');
+      statusLine.className = 'form-processing-status';
+      statusLine.setAttribute('role', 'status');
+      statusLine.setAttribute('aria-live', 'polite');
+      statusLine.textContent = processingMessages[action] || '保存しています…';
+      postForm.appendChild(statusLine);
+      postForm.setAttribute('aria-busy', 'true');
+    });
+  });
+  window.addEventListener('pageshow', (event) => {
+    if (!event.persisted) return;
+    document.querySelectorAll('form[data-submitting="true"]').forEach((postForm) => {
+      postForm.dataset.submitting = 'false';
+      postForm.removeAttribute('aria-busy');
+      postForm.querySelector('.form-processing-status')?.remove();
+      postForm.querySelectorAll('.is-processing').forEach((submitter) => {
+        submitter.disabled = false;
+        submitter.classList.remove('is-processing');
+        const original = submitter.dataset.originalLabel;
+        if (submitter instanceof HTMLButtonElement && original !== undefined) submitter.textContent = original;
+        else if (submitter instanceof HTMLInputElement && original !== undefined) submitter.value = original;
+      });
+    });
+  });
+
   const form = document.getElementById('chat-form');
   const button = document.getElementById('voice-button');
   const textarea = document.getElementById('chat-message');
@@ -7,6 +66,8 @@
   const messages = document.getElementById('chat-messages');
   const title = document.getElementById('chat-title');
   const errorBox = document.getElementById('chat-error');
+  const photoInput = document.getElementById('chat-photos');
+  const photoStatus = document.getElementById('photo-status');
   if (!form || !button || !textarea || !sendButton || !status || !messages || !title || !errorBox) return;
 
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -42,20 +103,41 @@
     updateVoiceButton();
   };
 
+  if (photoInput && photoStatus) photoInput.addEventListener('change', () => {
+    const files = Array.from(photoInput.files || []);
+    if (files.length > 4) {
+      photoInput.value = '';
+      photoStatus.textContent = '写真は一度に4枚までです。';
+      return;
+    }
+    photoStatus.textContent = files.length ? files.length + '枚を選択中（1枚8MBまで）' : '';
+  });
+
   async function sendMessage() {
-    if (waiting || !textarea.value.trim()) return;
+    const selectedPhotos = Array.from(photoInput?.files || []);
+    if (waiting || (!textarea.value.trim() && selectedPhotos.length === 0)) return;
     waiting = true;
     clearError();
     const message = textarea.value.trim();
     const payload = new FormData(form);
     payload.set('message', message);
-    const bubble = addBubble('mine', message);
+    const bubble = addBubble('mine', message || '📷 写真' + selectedPhotos.length + '枚を送信');
     textarea.value = '';
     textarea.disabled = true;
     sendButton.disabled = true;
-    status.textContent = '返事を待っています…';
+    if (button) button.disabled = true;
+    if (photoInput) photoInput.disabled = true;
+    form.setAttribute('aria-busy', 'true');
+    status.textContent = selectedPhotos.length
+      ? '写真を解析して、返事を作っています。少し時間がかかります…'
+      : '返事を待っています…';
+    const progressTimer = setTimeout(() => {
+      if (waiting) status.textContent = selectedPhotos.length
+        ? '写真を解析しています…数十秒かかることがあります。'
+        : 'AIが返事を作成しています…';
+    }, 5000);
     try {
-      const response = await fetch(form.action || window.location.href, {
+      const response = await fetch(window.location.href, {
         method: 'POST',
         body: payload,
         credentials: 'same-origin',
@@ -63,6 +145,22 @@
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || '送信できませんでした。');
+      bubble.textContent = result.user_message || message;
+      (result.photo_ids || []).forEach((photoId) => {
+        const link = document.createElement('a');
+        link.className = 'chat-photo-link';
+        link.href = '?photo=' + encodeURIComponent(photoId);
+        link.target = '_blank';
+        link.rel = 'noopener';
+        const image = document.createElement('img');
+        image.className = 'chat-photo';
+        image.src = link.href;
+        image.alt = '送信した学習写真';
+        link.appendChild(image);
+        bubble.appendChild(link);
+      });
+      if (photoInput) photoInput.value = '';
+      if (photoStatus) photoStatus.textContent = '';
       addBubble('theirs', result.reply);
       title.textContent = (result.title || '今日の振り返り') + (result.progress ? ' · ' + result.progress : '');
       if (result.ended) {
@@ -78,9 +176,13 @@
       showError(error.message || '通信できませんでした。もう一度お試しください。');
       status.textContent = '送信できませんでした。';
     } finally {
+      clearTimeout(progressTimer);
       waiting = false;
       textarea.disabled = false;
       sendButton.disabled = false;
+      button.disabled = false;
+      if (photoInput) photoInput.disabled = false;
+      form.removeAttribute('aria-busy');
       if (voiceMode && !listening) scheduleRestart();
     }
   }

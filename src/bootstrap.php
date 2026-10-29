@@ -26,3 +26,26 @@ function db(): PDO {
     ]);
     return $pdo;
 }
+
+function school_db(): PDO {
+    global $config;
+    static $pdo;
+    if ($pdo instanceof PDO) return $pdo;
+    foreach (['school_db_host', 'school_db_name', 'school_db_user', 'school_db_password'] as $key) {
+        if (!array_key_exists($key, $config) || $config[$key] === '') {
+            throw new RuntimeException('塾DBの接続設定がありません。');
+        }
+    }
+    $dsn = sprintf(
+        'mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4',
+        $config['school_db_host'],
+        $config['school_db_port'] ?? '3306',
+        $config['school_db_name']
+    );
+    $pdo = new PDO($dsn, $config['school_db_user'], $config['school_db_password'], [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_EMULATE_PREPARES => false,
+    ]);
+    return $pdo;
+}

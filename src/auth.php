@@ -6,6 +6,13 @@ function auth_provider_id(array $config): string {
     return $provider !== '' ? $provider : 'ishiwata_juku';
 }
 
+function auth_seed_default_notification_schedule(PDO $pdo, int $studentId): void {
+    $stmt = $pdo->prepare('INSERT IGNORE INTO notification_schedule (student_id, day_of_week, after_school_time, night_time) VALUES (?, ?, ?, ?)');
+    for ($day = 1; $day <= 7; $day++) {
+        $stmt->execute([$studentId, $day, '17:00:00', '22:00:00']);
+    }
+}
+
 function auth_attempt_hash(string $value, array $config): string {
     $key = (string)($config['app_key'] ?? '');
     if (strlen($key) < 32 || str_contains(strtolower($key), 'replace-with')) {
@@ -105,6 +112,7 @@ function auth_finish_school_login(PDO $pdo, array $config, array $schoolStudent,
         $stmt->execute([$userId, (string)$schoolStudent['simei'], '石渡塾']);
         $stmt = $pdo->prepare('INSERT INTO notification_preferences (student_id) VALUES (?)');
         $stmt->execute([$userId]);
+        auth_seed_default_notification_schedule($pdo, $userId);
         $stmt = $pdo->prepare('INSERT INTO student_school_links (user_id, school_provider, school_student_id, last_verified_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)');
         $stmt->execute([$userId, auth_provider_id($config), $schoolStudentId]);
         $pdo->commit();

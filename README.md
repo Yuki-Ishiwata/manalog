@@ -40,7 +40,7 @@
 
 ## エックスサーバーへの配置
 
-塾生認証には、まなログDB設定とは別に `SCHOOL_DB_HOST`、`SCHOOL_DB_PORT`、`SCHOOL_DB_NAME`、`SCHOOL_DB_USER`、`SCHOOL_DB_PASSWORD` を `.env` に設定します。`SCHOOL_DB_USER` は `kaiin`、`kaiin_syubetsu`、`syubetsu` の必要列だけを読める専用ユーザーにしてください。接続先DB名はサーバーの実際の塾DB名を指定します（ローカルでは `yoyaku` でした）。まなログ専用ユーザーは引き続き `DB_*` で認証します。
+塾生認証・塾連携通知には、まなログDB設定とは別に `SCHOOL_DB_HOST`、`SCHOOL_DB_PORT`、`SCHOOL_DB_NAME`、`SCHOOL_DB_USER`、`SCHOOL_DB_PASSWORD` を `.env` に設定します。`SCHOOL_DB_USER` は読み取り専用とし、`kaiin` の認証用列に加えて `id`、`email`、`email_oshirase_flg`、`delete_flg`、および `line_user_id` テーブルの `kaiin_id`、`line_user_id` のSELECTだけを許可してください。まなログ専用ユーザーは引き続き `DB_*` で認証します。
 
 未登録IDは、まなログに同じログインIDがない場合に塾DBで認証し、初回成功時に `users.id` と塾の `kaiin.id` を連携します。認証失敗時に別DBへ切り替えて試しません。IDが衝突する塾生は `school:` を付けたログインIDを使います。退会・利用停止は `kaiin.delete_flg` と、期間内の「在籍」（`system_flg=1`、`zaiseki_flg=1`）で判定します。既存の塾DBや塾ログイン処理には書き込みません。
 
@@ -87,7 +87,9 @@ Web PushにはHTTPS、Service Worker、端末ごとの購読、VAPID鍵が必要
 5. エックスサーバーのcronに5分間隔で次を登録します。例: `*/5 * * * *`、実行コマンド `/usr/bin/php8.3 /home/xs934178/ishiwata-juku.com/manalog/bin/send_notifications.php >> /home/xs934178/ishiwata-juku.com/manalog/storage/logs/notification-cron.log 2>&1`。CLIのPHPに `curl`、`mbstring`、`openssl` が必要です。cronは `Asia/Tokyo` を明示して実行します。
 6. iPhoneはSafariの共有メニューからホーム画面に追加し、そのアイコンからログインして通知を許可します。Androidはホーム画面に追加して通知を許可します。生徒画面で曜日別時刻・ON/OFF・一時停止を保存してください。
 
-夜の `25:00` は選択した曜日の翌日 `01:00` として計算します。cronは予定時刻を過ぎてから12時間以内の未処理通知を拾うため、5分間隔から多少遅れても送信できます。同じ生徒・学習日・通知種別はDBで一意にし、端末ごとの送信結果を別に保存します。送信が受理された端末には再送しません。結果が不明な通信エラーも二重送信を避けるため自動再送しません。通知タップは対象の会話を開き、未回答の質問はそのまま残ります。管理者画面の「通知送信履歴」と `notification_deliveries` / `notification_delivery_devices` で結果とエラーを確認できます。
+夜の `25:00` は選択した曜日の翌日 `01:00` として計算します。cronは予定時刻を過ぎてから12時間以内の未処理通知を拾うため、5分間隔から多少遅れても送信できます。同じ生徒・学習日・通知種別はDBで一意にし、端末／外部連絡先ごとの結果を保存します。Pushがサーバー上で無効なら、塾連携生徒にはLINEを優先し、送信先がない・送信に失敗した場合は塾DBのメール配信設定に従ってメールを送ります。LINE APIの成功応答は端末への実着信までは保証しません。OS側で通知を切っても購読がサーバーに残っている場合、その状態をサーバーから直接判定できません。管理者画面の「通知送信履歴」と `notification_deliveries`、`notification_delivery_devices`、`notification_delivery_external` で結果とエラーを確認できます。
+
+通知時刻の初期値は帰宅後17:00・夜22:00です。`022_default_notification_schedule.sql` は曜日ごとの設定行がない生徒にだけ初期値を追加します。`023_school_notification_fallback.sql` はLINE／メールの外部送信履歴とチャンネル記録を追加します。両方ともまなログ専用DBに適用してください。外部通知には `.env` の `LINE_CHANNEL_ACCESS_TOKEN` が必要です。メール送信元は `MANALOG_MAIL_FROM` で設定します。塾DBユーザーは引き続き読み取り専用です。
 
 ## Telegram 学習サマリー通知
 

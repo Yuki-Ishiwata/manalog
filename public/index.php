@@ -104,7 +104,7 @@ function render_learning_list(PDO $pdo, int $studentId, bool $parentMode = false
 function render_weekly_review_plan(array $plan, string $photoMode = 'student', ?int $childId = null): void {
     $statusLabels = ['proposed' => '提案済み', 'in_progress' => '取り組み中', 'completed' => '実施済み', 'not_done' => '未実施', 'needs_review' => '次回も復習'];
     ?>
-    <section class="weekly-review-plan"><h3>今週のおすすめ復習</h3><p class="muted">AIの提案です。記録にない教材や問題番号は補っていません。</p>
+    <section class="weekly-review-plan"><h3>今週のおすすめ復習</h3>
       <?php if (empty($plan['items'])): ?><p class="muted">今週の復習記録はありません。</p><?php else: ?>
         <?php foreach ($plan['items'] as $index => $item): $candidate = $item['candidate'] ?? []; $title = trim(implode('／', array_filter([(string)($candidate['subject'] ?? ''), (string)($candidate['unit'] ?? '')]))) ?: '学習内容'; ?>
           <article class="weekly-review-item"><strong>優先<?= (int)$index + 1 ?> · <?= h($title) ?></strong><span class="weekly-review-status"><?= h($statusLabels[$item['status'] ?? 'proposed'] ?? '提案済み') ?></span>
@@ -132,7 +132,11 @@ function remembered_view_mode(): string {
     $mode = (string)($_COOKIE['manalog_view_mode'] ?? 'student');
     return in_array($mode, ['student', 'parent'], true) ? $mode : 'student';
 }
-function subject_question(int $period, string $subject): string { return $period . '時間目の' . $subject . 'は、何を勉強した？'; }
+function subject_question(int $period, string $subject): string {
+    return $subject === '__pending_subject__'
+        ? $period . '時間目は何の教科だった？ 授業がなかった場合も教えてね。'
+        : $period . '時間目の' . $subject . 'は、何を勉強した？';
+}
 function after_school_skip_reason(string $message): ?string {
     $text = mb_convert_kana(trim($message), 's');
     if (preg_match('/(この|その)?(教科|科目)(は|、)?(聞かなくていい|聞かなくて大丈夫|質問しなくていい|質問しなくて大丈夫|聞かなくてよい|質問不要|飛ばして|パスして)/u', $text)
@@ -141,12 +145,11 @@ function after_school_skip_reason(string $message): ?string {
     return null;
 }
 function notification_time_input_value(?string $databaseTime): array {
-    if (!$databaseTime || !preg_match('/^(\d{2}):(\d{2})/', $databaseTime, $matches)) return ['time' => '', 'next_day' => false];
+    if (!$databaseTime || !preg_match('/^(\d{2}):(\d{2})/', $databaseTime, $matches)) return ['time' => ''];
     $hour = (int)$matches[1];
     $minute = $matches[2];
-    $nextDay = $hour >= 24;
-    if ($nextDay) $hour -= 24;
-    return ['time' => sprintf('%02d:%s', $hour, $minute), 'next_day' => $nextDay];
+    if ($hour >= 24) $hour -= 24;
+    return ['time' => sprintf('%02d:%s', $hour, $minute)];
 }
 function review_stage_label(string $stage, string $reviewType = 'after_school', bool $timetableUnavailable = false): string {
     if ($reviewType === 'after_school' && $timetableUnavailable) return match ($stage) {
@@ -262,18 +265,23 @@ function ai_after_school_turn(array $config, array $context, array $history, str
     $input = [];
     foreach ($history as $item) $input[] = ['role' => $item['role'] === 'assistant' ? 'assistant' : 'user', 'content' => $item['content']];
     $input[] = ['role' => 'user', 'content' => $message];
+    $pendingSubject = $focus && (string)$focus['subject'] === '__pending_subject__';
     $target = $focus
         ? (int)$focus['period_number'] . '時間目の' . (string)$focus['subject']
         : '今日の学校の授業全体';
-    $instructions = 'あなたは生徒の学校授業の振り返りを聞くAIです。今回の対象は' . $target . 'です。現在の段階は' . ($stage === 'activity' ? '教科を思い出す段階' : '授業内容を思い出す段階') . 'です。会話の文脈と生徒の最新の返答から、通常の授業を受けた、欠席した、授業がなかった、または自習だったかを判断してください。欠席・休校・行事などで授業がなかったことや自習だったことが明確なら、その状態を返してください。判断材料が足りない場合は決めつけず unclear にしてください。テストを受けた、授業内容を思い出せない、短い返答だったというだけで「授業なし」にしないでください。学習内容がまだ分からない、または教科名だけで具体的な単元・活動が分からない場合は content_captured を false にしてください。生徒が学んだ単元・用語・問題の種類・授業中の活動など、あとで記録に残せる具体的な内容を話した場合だけ true にしてください。false の場合は、記録に必要な内容を聞き出すため、会話履歴を見てまだ尋ねていない切り口から質問を一つしてください。何をやったか、どんな問題だったか、ノートや教科書のどの場面かなどを使い、同じ質問を繰り返さず、少しずつ具体化してください。質問回数に上限を設けず、内容が分かるまで急いで理解度確認へ進まないでください。思い出せないと言われたら答えを教えず、責めずに、より答えやすい小さな手掛かりを尋ねてください。true の場合は、生徒の実際の言葉に沿って短く受け止め、理解度や考え方を確かめる質問を一つだけ続けてください。毎回「難しかった？」と聞く定型文にせず、答えた単元や活動に合わせてください。授業がなかった場合の生徒向けの返答は短く受け止めるだけにし、別の質問を加えないでください。会話にない内容や単元を作らず、質問は一度に一つにしてください。';
+    $instructions = 'あなたは生徒の学校授業の振り返りを聞くAIです。今回の対象は' . $target . 'です。現在の段階は' . ($stage === 'activity' ? '教科を思い出す段階' : '授業内容を思い出す段階') . 'です。会話の文脈と生徒の最新の返答から、通常の授業を受けた、欠席した、授業がなかった、または自習だったかを判断してください。欠席・休校・行事などで授業がなかったことや自習だったことが明確なら、その状態を返してください。学校全体が休み（祝日・休校日・長期休みなど）なら skip_remaining を true にしてください。特定の時間だけ授業がなかった場合や生徒だけが欠席した場合は false にしてください。判断材料が足りない場合は決めつけず unclear にしてください。テストを受けた、授業内容を思い出せない、短い返答だったというだけで「授業なし」にしないでください。学習内容がまだ分からない、または教科名だけで具体的な単元・活動が分からない場合は content_captured を false にしてください。生徒が学んだ単元・用語・問題の種類・授業中の活動など、あとで記録に残せる具体的な内容を話した場合だけ true にしてください。false の場合は、記録に必要な内容を聞き出すため、会話履歴を見てまだ尋ねていない切り口から質問を一つしてください。何をやったか、どんな問題だったか、ノートや教科書のどの場面かなどを使い、同じ質問を繰り返さず、少しずつ具体化してください。質問回数に上限を設けず、内容が分かるまで急いで理解度確認へ進まないでください。思い出せないと言われたら答えを教えず、責めずに、より答えやすい小さな手掛かりを尋ねてください。true の場合は、生徒の実際の言葉に沿って短く受け止め、理解度や考え方を確かめる質問を一つだけ続けてください。毎回「難しかった？」と聞く定型文にせず、答えた単元や活動に合わせてください。授業がなかった場合の生徒向けの返答は短く受け止めるだけにし、別の質問を加えないでください。会話にない内容や単元を作らず、質問は一度に一つにしてください。';
+    if ($pendingSubject) $instructions .= '今回の生徒の返答から、教科名を subject に入れてください。授業がある教科を答えた場合は、その教科を短く受け止め、「何を勉強した？」と続けて聞いてください。教科がはっきりしなければ subject は空文字にして、教科をもう一度尋ねてください。教科名や授業内容を推測で補わないでください。';
+    else $instructions .= 'subject は空文字にしてください。';
     $schema = [
         'type' => 'object',
         'properties' => [
             'lesson_status' => ['type' => 'string', 'enum' => ['attended', 'absent', 'no_class', 'self_study', 'unclear']],
             'content_captured' => ['type' => 'boolean'],
+            'skip_remaining' => ['type' => 'boolean'],
+            'subject' => ['type' => 'string'],
             'reply' => ['type' => 'string'],
         ],
-        'required' => ['lesson_status', 'content_captured', 'reply'],
+        'required' => ['lesson_status', 'content_captured', 'skip_remaining', 'subject', 'reply'],
         'additionalProperties' => false,
     ];
     $payload = json_encode([
@@ -294,8 +302,8 @@ function ai_after_school_turn(array $config, array $context, array $history, str
     foreach (($data['output'] ?? []) as $item) foreach (($item['content'] ?? []) as $part) if (($part['type'] ?? '') === 'output_text') $text .= (string)($part['text'] ?? '');
     $result = json_decode($text, true);
     $statuses = ['attended', 'absent', 'no_class', 'self_study', 'unclear'];
-    if (!is_array($result) || !in_array($result['lesson_status'] ?? null, $statuses, true) || !is_bool($result['content_captured'] ?? null) || !is_string($result['reply'] ?? null) || trim($result['reply']) === '') throw new RuntimeException('AIから振り返りの応答を受け取れませんでした。もう一度お試しください。');
-    return ['lesson_status' => $result['lesson_status'], 'content_captured' => $result['content_captured'], 'reply' => mb_substr(trim($result['reply']), 0, 1000)];
+    if (!is_array($result) || !in_array($result['lesson_status'] ?? null, $statuses, true) || !is_bool($result['content_captured'] ?? null) || !is_bool($result['skip_remaining'] ?? null) || !is_string($result['subject'] ?? null) || !is_string($result['reply'] ?? null) || trim($result['reply']) === '') throw new RuntimeException('AIから振り返りの応答を受け取れませんでした。もう一度お試しください。');
+    return ['lesson_status' => $result['lesson_status'], 'content_captured' => $result['content_captured'], 'skip_remaining' => $result['skip_remaining'], 'subject' => mb_substr(trim($result['subject']), 0, 100), 'reply' => mb_substr(trim($result['reply']), 0, 1000)];
 }
 function ai_timetable_parse(array $config, string $imageData, string $mime): array {
     if (empty($config['ai_api_key']) || empty($config['ai_model'])) throw new RuntimeException('AI APIの設定がありません。.envのAI_API_KEYとAI_MODELを設定してください。');
@@ -494,6 +502,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                 $stmt->execute([$accountId, (int)$_SESSION['organization_id']]);
                 if (!$stmt->rowCount()) throw new RuntimeException('講師・保護者アカウントを確認できません。');
                 $notice = 'アカウント状態を更新しました。';
+            } elseif (tenant_admin_authorized($pdo) && $action === 'delete_staff_account') {
+                $accountId = filter_var($_POST['account_id'] ?? null, FILTER_VALIDATE_INT);
+                if (!$accountId) throw new RuntimeException('対象アカウントを選択してください。');
+                $stmt = $pdo->prepare("DELETE FROM users WHERE id = ? AND role IN ('teacher','parent') AND organization_id = ?");
+                $stmt->execute([$accountId, (int)$_SESSION['organization_id']]);
+                if (!$stmt->rowCount()) throw new RuntimeException('この塾の講師・保護者アカウントを確認できません。');
+                $notice = '講師・保護者アカウントを削除しました。';
             } elseif (tenant_admin_authorized($pdo) && $action === 'reset_staff_password') {
                 $accountId = filter_var($_POST['account_id'] ?? null, FILTER_VALIDATE_INT);
                 $password = (string)($_POST['password'] ?? '');
@@ -550,7 +565,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
             } elseif (($_SESSION['role'] ?? '') === 'student' && $action === 'change_password') {
                 if (!$mustChangePassword) throw new RuntimeException('パスワード変更は必要ありません。');
                 $newPassword = (string)($_POST['new_password'] ?? '');
-                if (strlen($newPassword) < 12) throw new RuntimeException('新しいパスワードは12文字以上で入力してください。');
                 if ($newPassword !== (string)($_POST['new_password_confirm'] ?? '')) throw new RuntimeException('確認用パスワードが一致しません。');
                 $stmt = $pdo->prepare("UPDATE users SET password_hash = ? WHERE id = ? AND role = 'student'");
                 $stmt->execute([password_hash($newPassword, PASSWORD_DEFAULT), (int)$_SESSION['user_id']]);
@@ -569,6 +583,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                 $stmt->execute([$studentId, $name, trim((string)($_POST['school_name'] ?? '')) ?: null, trim((string)($_POST['grade'] ?? '')) ?: null]);
                 $stmt = $pdo->prepare('INSERT INTO notification_preferences (student_id) VALUES (?)');
                 $stmt->execute([$studentId]);
+                auth_seed_default_notification_schedule($pdo, $studentId);
                 $pdo->commit();
                 $notice = '生徒アカウントを登録しました。';
             } elseif (tenant_admin_authorized($pdo) && $action === 'preview_school_link') {
@@ -628,6 +643,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                 $stmt->execute([$id, (int)$_SESSION['organization_id']]);
                 if (!$stmt->rowCount()) throw new RuntimeException('この塾の生徒アカウントを確認できません。');
                 $notice = 'アカウント状態を更新しました。';
+            } elseif (tenant_admin_authorized($pdo) && $action === 'delete_student') {
+                $id = filter_var($_POST['student_id'] ?? null, FILTER_VALIDATE_INT);
+                if (!$id) throw new RuntimeException('対象の生徒が指定されていません。');
+                $studentCheck = $pdo->prepare("SELECT id, auth_source FROM users WHERE id = ? AND role = 'student' AND organization_id = ?");
+                $studentCheck->execute([$id, (int)$_SESSION['organization_id']]);
+                $studentAccount = $studentCheck->fetch();
+                if (!$studentAccount) throw new RuntimeException('この塾の生徒アカウントを確認できません。');
+                $photoStmt = $pdo->prepare('SELECT storage_key FROM learning_photos WHERE student_id = ?');
+                $photoStmt->execute([$id]);
+                $photoKeys = $photoStmt->fetchAll(PDO::FETCH_COLUMN);
+                $pdo->beginTransaction();
+                $delete = $pdo->prepare("DELETE FROM users WHERE id = ? AND role = 'student' AND organization_id = ?");
+                $delete->execute([$id, (int)$_SESSION['organization_id']]);
+                if (!$delete->rowCount()) throw new RuntimeException('この塾の生徒アカウントを確認できません。');
+                $pdo->commit();
+                $uploadRoot = realpath($appRoot . '/storage/uploads');
+                if ($uploadRoot) foreach ($photoKeys as $photoKey) {
+                    $photoKey = (string)$photoKey;
+                    if (!str_starts_with($photoKey, 'learning/' . $id . '/')) continue;
+                    $photoPath = realpath($uploadRoot . '/' . $photoKey);
+                    if ($photoPath && str_starts_with($photoPath, $uploadRoot . DIRECTORY_SEPARATOR) && is_file($photoPath)) @unlink($photoPath);
+                }
+                $notice = $studentAccount['auth_source'] === 'school'
+                    ? 'まなログの生徒アカウントと学習データを削除しました。塾DBは変更していません。塾アカウントで再ログインすると、まなログのアカウントが再作成されます。'
+                    : '生徒アカウントと学習データを削除しました。';
             } elseif (tenant_admin_authorized($pdo) && $action === 'set_student_timetable_mode') {
                 $id = filter_var($_POST['student_id'] ?? null, FILTER_VALIDATE_INT);
                 $weeklyVaries = (string)($_POST['timetable_unavailable'] ?? '');
@@ -691,8 +731,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                 if (!is_array($submitted)) throw new RuntimeException('通知時刻の入力内容を確認してください。');
                 $enabled = $_POST['notification_enabled'] ?? [];
                 if (!is_array($enabled)) throw new RuntimeException('通知曜日の入力内容を確認してください。');
-                $nightNextDay = $_POST['night_next_day'] ?? [];
-                if (!is_array($nightNextDay)) throw new RuntimeException('夜の通知時刻を確認してください。');
                 $schedule = [];
                 for ($day = 1; $day <= 7; $day++) {
                     $row = $submitted[$day] ?? [];
@@ -702,10 +740,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                         if (!is_string($row[$type] ?? '')) throw new RuntimeException('通知時刻の入力内容を確認してください。');
                         $time = trim((string)($row[$type] ?? ''));
                         if ($time !== '' && !preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/', $time)) throw new RuntimeException('通知時刻を確認してください。');
-                        $isNextDay = $type === 'night' && isset($nightNextDay[$day]);
                         [$hour, $minute] = $time !== '' ? array_map('intval', explode(':', $time)) : [0, 0];
-                        if ($isNextDay && $hour > 5) throw new RuntimeException('翌日の通知は00:00〜05:59で入力してください。');
-                        if ($isNextDay && $time !== '') $hour += 24;
+                        $isNextDay = $type === 'night' && $time !== '' && $hour < 6;
+                        if ($isNextDay) $hour += 24;
                         $storedTime = $time === '' ? null : sprintf('%02d:%02d:00', $hour, $minute);
                         $schedule[$day][$type] = $storedTime;
                         $schedule[$day][$type . '_enabled'] = isset($enabled[$day][$type]) ? 1 : 0;
@@ -848,6 +885,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                         $subjectStmt = $pdo->prepare("SELECT subject FROM chat_session_subjects WHERE session_id = ? AND review_stage <> 'completed' ORDER BY position LIMIT 1");
                         $subjectStmt->execute([$sessionId]);
                         $photoSubject = $subjectStmt->fetchColumn() ?: null;
+                        if ($photoSubject === '__pending_subject__') $photoSubject = null;
                     }
                     $photoResult = learning_photo_uploads($pdo, (int)$_SESSION['user_id'], (int)$sessionId, $_FILES['photos'], $activity, $photoSubject, (string)$chatSession['session_date'], $config);
                     $displayMessage = ($message !== '' ? $message . "\n" : '') . '📷 写真' . $photoCount . '枚を送信しました。' . "\n" . '読み取り: ' . $photoResult['summary'];
@@ -877,6 +915,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                                 $subjectIndex = $index;
                                 $focus = $candidate;
                                 $reviewStage = (string)$candidate['review_stage'];
+                                if ((string)$candidate['subject'] === '__pending_subject__') $reviewStage = 'activity';
                                 break;
                             }
                         }
@@ -923,14 +962,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                     : null;
                 if ($skipReason === 'exclude' && !$focus) $skipReason = null;
                 $afterSchoolTurn = null;
-                if ($skipReason === null && $chatSession['session_type'] === 'after_school' && in_array($reviewStage, ['activity', 'recall'], true)) {
+                if ($skipReason !== 'exclude' && $chatSession['session_type'] === 'after_school' && in_array($reviewStage, ['activity', 'recall'], true)) {
                     $afterSchoolTurn = ai_after_school_turn($config, $context, $history, $message, $focus, $reviewStage);
                     if (in_array($afterSchoolTurn['lesson_status'], ['absent', 'no_class', 'self_study'], true)) $skipReason = 'no_lesson';
                 }
+                $skipRemainingSubjects = $chatSession['session_type'] === 'after_school' && !empty($afterSchoolTurn['skip_remaining']);
+                $resolvedSubject = $focus && (string)$focus['subject'] === '__pending_subject__'
+                    ? (string)($afterSchoolTurn['subject'] ?? '')
+                    : (string)($focus['subject'] ?? '');
+                $skipInvestigation = $chatSession['session_type'] === 'after_school'
+                    && $afterSchoolTurn !== null
+                    && $skipReason === null
+                    && review_subject_is_non_core($resolvedSubject);
                 if ($skipReason !== null) {
                     $reply = $skipReason === 'exclude'
                         ? 'わかった。この教科は次回から質問しない設定にするね。'
-                        : ($focus ? 'そうなんだ。この時間の授業内容は飛ばして、次の時間を確認するね。' : 'そうなんだ。今日は学校の授業はなかったんだね。教えてくれてありがとう。');
+                        : ($skipRemainingSubjects ? 'そうなんだ。今日は学校がお休みなんだね。教えてくれてありがとう。' : ($focus ? 'そうなんだ。この時間の授業内容は飛ばして、次の時間を確認するね。' : 'そうなんだ。今日は学校の授業はなかったんだね。教えてくれてありがとう。'));
+                    $nextStage = 'completed';
+                } elseif ($skipInvestigation && $focus) {
+                    $reply = 'わかった。' . $resolvedSubject . 'は記録せず、次の時間に進むね。';
                     $nextStage = 'completed';
                 } elseif ($chatSession['session_type'] === 'after_school' && !$focusSubjects && $reviewStage === 'activity') {
                     $reply = $afterSchoolTurn['reply'] ?? '教科を教えてくれてありがとう。今日は何を勉強した？';
@@ -964,16 +1014,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                 }
 
                 $completedSubject = $focus && $nextStage === 'completed';
+                $pendingSubject = $focus && (string)$focus['subject'] === '__pending_subject__';
+                if ($pendingSubject && $skipReason === null) {
+                    if ($afterSchoolTurn && $afterSchoolTurn['subject'] !== '') $focus['subject'] = $afterSchoolTurn['subject'];
+                    // The placeholder itself signals that the next turn must ask for a subject.
+                    // Keep the persisted enum on its supported value while doing so.
+                    $nextStage = 'recall';
+                }
                 $nextSubject = null;
-                if ($completedSubject) {
+                if ($completedSubject && !$skipRemainingSubjects) {
                     foreach (array_slice($focusSubjects, (int)$subjectIndex + 1) as $candidate) {
                         if ($candidate['review_stage'] !== 'completed') { $nextSubject = $candidate; break; }
                     }
                 }
                 $finishedReview = $focusSubjects
-                    ? ($completedSubject && !$nextSubject)
+                    ? ($skipRemainingSubjects || ($completedSubject && !$nextSubject))
                     : ((in_array($chatSession['session_type'], ['after_school', 'night'], true) && $nextStage === 'completed') || ($chatSession['session_type'] === 'weekly_review' && $answeredCount + 1 >= min(3, count($weeklyReviewItems))));
-                if ($completedSubject) $reply .= $nextSubject
+                if ($completedSubject && !$skipRemainingSubjects) $reply .= $nextSubject
                     ? "\n\n" . subject_question((int)$nextSubject['period_number'], (string)$nextSubject['subject'])
                     : "\n\n今日の振り返りはここまで。話してくれてありがとう。";
                 elseif ($finishedReview) $reply .= "\n\n" . ($chatSession['session_type'] === 'night' ? '夜の振り返りはここまで。話してくれてありがとう。' : ($chatSession['session_type'] === 'weekly_review' ? '今週の復習はここまで。思い出してくれてありがとう。' : '今日の振り返りはここまで。話してくれてありがとう。'));
@@ -989,7 +1046,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                 $stmt = $pdo->prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'user', ?)");
                 $stmt->execute([$sessionId, $displayMessage]);
                 $userMessageId = (int)$pdo->lastInsertId();
-                if ($skipReason === 'exclude' && $focus) {
+                if ($pendingSubject && $skipReason === null && $afterSchoolTurn && $afterSchoolTurn['subject'] !== '') {
+                    $stmt = $pdo->prepare('UPDATE chat_session_subjects SET subject = ? WHERE id = ? AND session_id = ? AND subject = ?');
+                    $stmt->execute([$afterSchoolTurn['subject'], (int)$focus['id'], $sessionId, '__pending_subject__']);
+                }
+                if ($skipReason === 'exclude' && $focus && !$pendingSubject) {
                     $stmt = $pdo->prepare('INSERT IGNORE INTO review_excluded_subjects (student_id, subject) VALUES (?, ?)');
                     $stmt->execute([(int)$_SESSION['user_id'], (string)$focus['subject']]);
                 }
@@ -1006,6 +1067,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pdo) {
                 if ($focus) {
                     $stmt = $pdo->prepare('UPDATE chat_session_subjects SET review_stage = ? WHERE id = ? AND session_id = ?');
                     $stmt->execute([$nextStage, (int)$focus['id'], $sessionId]);
+                    if ($skipRemainingSubjects) {
+                        $stmt = $pdo->prepare("UPDATE chat_session_subjects SET review_stage = 'completed' WHERE session_id = ? AND review_stage <> 'completed'");
+                        $stmt->execute([$sessionId]);
+                    }
                 } elseif (in_array($chatSession['session_type'], ['after_school', 'night', 'weekly_review'], true)) {
                     $stmt = $pdo->prepare('UPDATE chat_sessions SET review_stage = ? WHERE id = ?');
                     $stmt->execute([$chatSession['session_type'] === 'weekly_review' && $finishedReview ? 'completed' : $nextStage, $sessionId]);
@@ -1298,7 +1363,7 @@ if ($pdo && isset($_SESSION['user_id']) && in_array(($_SESSION['role'] ?? ''), [
     }
 }
 ?><!doctype html>
-<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#45795e"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="まなログ"><title>まなログ</title><link rel="manifest" href="manifest.php"><link rel="apple-touch-icon" href="assets/icon-192.png"><link rel="stylesheet" href="assets/app.css?v=20261021-notification-layout"><link rel="stylesheet" href="assets/chat.css?v=20261021-notification-layout"><link rel="stylesheet" href="assets/notification-settings.css?v=20261027-time-placeholder"><?php if (in_array(($_SESSION['role'] ?? ''), ['admin','teacher'], true)): ?><link rel="stylesheet" href="assets/instructor.css?v=20261020-phase4-tenant"><?php endif; ?></head>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#45795e"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="まなログ"><title>まなログ</title><link rel="manifest" href="manifest.php"><link rel="apple-touch-icon" href="assets/icon-192.png"><link rel="stylesheet" href="assets/app.css?v=20261021-notification-layout"><link rel="stylesheet" href="assets/chat.css?v=20261021-notification-layout"><link rel="stylesheet" href="assets/notification-settings.css?v=20261102-push-banner"><?php if (in_array(($_SESSION['role'] ?? ''), ['admin','teacher'], true)): ?><link rel="stylesheet" href="assets/instructor.css?v=20261020-phase4-tenant"><?php endif; ?></head>
 <body><main class="shell">
   <header class="brand"><span class="brand-mark">学</span><div><h1>まなログ</h1><p>今日の学びを、少しずつ。</p></div></header>
   <?php if (isset($_SESSION['user_id']) && in_array(($_SESSION['role'] ?? ''), ['admin', 'teacher'], true)): ?>
@@ -1326,6 +1391,7 @@ if ($pdo && isset($_SESSION['user_id']) && in_array(($_SESSION['role'] ?? ''), [
         <div><strong><?= h($student['display_name'] ?: $student['login_id']) ?></strong><p><?= h($student['login_id']) ?> · <?= h($student['school_name'] ?: '学校未設定') ?> · <?= h($student['grade'] ?: '学年未設定') ?> · <?= $student['auth_source'] === 'school' ? '塾DB認証' : 'まなログ認証' ?></p><span class="status <?= $student['status'] === 'active' ? 'active' : '' ?>"><?= $student['status'] === 'active' ? '有効' : '無効' ?></span><p class="setup-status">初期設定：時間割 <?= $setupStatus['timetable_unavailable'] ? '週ごとに変わる' : ($setupStatus['timetable'] ? '済' : '未設定') ?> ／ 通知時刻 <?= $setupStatus['notification_times'] ? '済' : '未設定' ?> ／ Push <?= $setupStatus['push'] ? '有効' : '未設定' ?></p></div>
         <div class="row-actions">
           <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="toggle_student"><input type="hidden" name="student_id" value="<?= (int)$student['id'] ?>"><button class="small-button" type="submit"><?= $student['status'] === 'active' ? '無効化' : '有効化' ?></button></form>
+          <form method="post" onsubmit="return confirm('この生徒のアカウントと学習記録・写真を完全に削除します。この操作は取り消せません。削除しますか？')"><?= csrf_field() ?><input type="hidden" name="action" value="delete_student"><input type="hidden" name="student_id" value="<?= (int)$student['id'] ?>"><button class="small-button danger-button" type="submit">アカウントを削除</button></form>
           <details><summary>時間割設定</summary><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="set_student_timetable_mode"><input type="hidden" name="student_id" value="<?= (int)$student['id'] ?>"><label>時間割<select name="timetable_unavailable"><option value="0" <?= empty($student['timetable_unavailable']) ? 'selected' : '' ?>>曜日ごとに登録</option><option value="1" <?= !empty($student['timetable_unavailable']) ? 'selected' : '' ?>>週ごとに変わります</option></select></label><button class="small-button" type="submit">保存</button></form><p class="muted">この設定は選択した生徒だけに適用されます。登録済みの時間割は削除されません。</p></details>
           <?php $savedExcludedSubjects = $excludedSubjectsByStudent[(int)$student['id']] ?? []; $excludedValue = $error && ($_POST['action'] ?? '') === 'set_student_review_exclusions' && (int)($_POST['student_id'] ?? 0) === (int)$student['id'] && is_string($_POST['excluded_subjects'] ?? null) ? $_POST['excluded_subjects'] : implode("\n", $savedExcludedSubjects); ?><details><summary>質問しない教科（<?= count($savedExcludedSubjects) ?>）</summary><p class="muted">道徳など、振り返りで質問しなくてよい教科を1行に1つ入力します。時間割の教科名と同じ表記にしてください。</p><form method="post" class="review-settings"><?= csrf_field() ?><input type="hidden" name="action" value="set_student_review_exclusions"><input type="hidden" name="student_id" value="<?= (int)$student['id'] ?>"><label for="admin-excluded-subjects-<?= (int)$student['id'] ?>">質問しない教科</label><textarea id="admin-excluded-subjects-<?= (int)$student['id'] ?>" name="excluded_subjects" rows="3" maxlength="5000" placeholder="道徳&#10;学活"><?= h($excludedValue) ?></textarea><button class="small-button" type="submit">保存</button></form></details>
           <?php if ($student['auth_source'] === 'local'): ?><details><summary>ID・パスワード</summary><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="change_student_login_id"><input type="hidden" name="student_id" value="<?= (int)$student['id'] ?>"><label>ログインID<input name="login_id" value="<?= h($student['login_id']) ?>" required maxlength="100" autocomplete="off"></label><button class="small-button" type="submit">IDを変更</button></form><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="reset_password"><input type="hidden" name="student_id" value="<?= (int)$student['id'] ?>"><label>新パスワード<input type="password" name="password" minlength="12" required autocomplete="new-password"></label><button class="small-button" type="submit">PWを再設定</button></form></details><?php else: ?><span class="muted">ID・パスワードは塾側で管理</span><?php endif; ?>
@@ -1336,7 +1402,7 @@ if ($pdo && isset($_SESSION['user_id']) && in_array(($_SESSION['role'] ?? ''), [
         <form method="post" class="form-grid"><?= csrf_field() ?><input type="hidden" name="action" value="create_staff_account"><label>アカウント種別<select name="account_role"><option value="teacher">講師</option><option value="parent">保護者</option></select></label><label>ログインID<input name="login_id" required maxlength="100"></label><label>初期パスワード<input type="password" name="password" required minlength="12" autocomplete="new-password"></label><button class="small-button" type="submit">アカウントを作成</button></form>
         <?php $parentAccounts = array_values(array_filter($staffAccounts, static fn(array $account): bool => $account['role'] === 'parent' && $account['status'] === 'active')); $activeStudents = array_values(array_filter($students, static fn(array $student): bool => $student['status'] === 'active')); ?>
         <?php if ($parentAccounts && $activeStudents): ?><form method="post" class="form-grid"><?= csrf_field() ?><input type="hidden" name="action" value="link_parent_student"><h3>保護者と生徒を紐付け</h3><label>保護者<select name="parent_user_id" required><option value="">選択してください</option><?php foreach ($parentAccounts as $account): ?><option value="<?= (int)$account['id'] ?>"><?= h($account['login_id']) ?></option><?php endforeach; ?></select></label><label>生徒<select name="student_user_id" required><option value="">選択してください</option><?php foreach ($activeStudents as $student): ?><option value="<?= (int)$student['id'] ?>"><?= h(($student['display_name'] ?: $student['login_id']) . ' · ' . $student['login_id']) ?></option><?php endforeach; ?></select></label><button class="small-button" type="submit">紐付けを追加</button></form><?php endif; ?>
-        <?php if ($staffAccounts): ?><h3>登録済みアカウント</h3><?php foreach ($staffAccounts as $account): ?><div class="student-row"><span><?= $account['role'] === 'teacher' ? '講師' : '保護者' ?> · <?= h($account['login_id']) ?> · <?= $account['status'] === 'active' ? '有効' : '無効' ?></span><div class="row-actions"><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="toggle_staff_account"><input type="hidden" name="account_id" value="<?= (int)$account['id'] ?>"><button class="small-button" type="submit"><?= $account['status'] === 'active' ? '無効化' : '有効化' ?></button></form><details><summary>PW再発行</summary><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="reset_staff_password"><input type="hidden" name="account_id" value="<?= (int)$account['id'] ?>"><label>新パスワード<input type="password" name="password" minlength="12" required autocomplete="new-password"></label><button class="small-button" type="submit">再設定</button></form></details></div></div><?php endforeach; ?><?php endif; ?>
+        <?php if ($staffAccounts): ?><h3>登録済みアカウント</h3><?php foreach ($staffAccounts as $account): ?><div class="student-row"><span><?= $account['role'] === 'teacher' ? '講師' : '保護者' ?> · <?= h($account['login_id']) ?> · <?= $account['status'] === 'active' ? '有効' : '無効' ?></span><div class="row-actions"><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="toggle_staff_account"><input type="hidden" name="account_id" value="<?= (int)$account['id'] ?>"><button class="small-button" type="submit"><?= $account['status'] === 'active' ? '無効化' : '有効化' ?></button></form><form method="post" onsubmit="return confirm('この講師・保護者アカウントを削除します。よろしいですか？')"><?= csrf_field() ?><input type="hidden" name="action" value="delete_staff_account"><input type="hidden" name="account_id" value="<?= (int)$account['id'] ?>"><button class="small-button danger-button" type="submit">削除</button></form><details><summary>PW再発行</summary><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="reset_staff_password"><input type="hidden" name="account_id" value="<?= (int)$account['id'] ?>"><label>新パスワード<input type="password" name="password" minlength="12" required autocomplete="new-password"></label><button class="small-button" type="submit">再設定</button></form></details></div></div><?php endforeach; ?><?php endif; ?>
         <?php if ($parentLinks): ?><h3>保護者との紐付け</h3><?php foreach ($parentLinks as $parentLink): ?><div class="student-row"><span><?= h($parentLink['parent_login']) ?> → <?= h($parentLink['display_name'] ?: $parentLink['student_login']) ?> (<?= h($parentLink['student_login']) ?>)</span><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="unlink_parent_student"><input type="hidden" name="link_id" value="<?= (int)$parentLink['id'] ?>"><button class="small-button" type="submit">解除</button></form></div><?php endforeach; ?><?php endif; ?>
       </details>
       </section><?php endif; ?>
@@ -1398,9 +1464,9 @@ if ($pdo && isset($_SESSION['user_id']) && in_array(($_SESSION['role'] ?? ''), [
       <a class="button secondary" href="?logout=1">ログアウト</a>
     </section>
   <?php elseif (isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'student' && $mustChangePassword): ?>
-    <section class="card"><p class="eyebrow">初回ログイン</p><h2>パスワードを変更</h2><p class="muted">初期パスワード 0000 を変更してください。新しいパスワードは12文字以上で入力します。</p>
+    <section class="card"><p class="eyebrow">初回ログイン</p><h2>パスワードを変更</h2><p class="muted">初期パスワード 0000 を変更してください。</p>
       <?php if ($error): ?><p class="error"><?= h($error) ?></p><?php endif; ?>
-      <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="change_password"><label>新しいパスワード<input type="password" name="new_password" minlength="12" autocomplete="new-password" required></label><label>新しいパスワード（確認）<input type="password" name="new_password_confirm" minlength="12" autocomplete="new-password" required></label><button class="button" type="submit">パスワードを変更</button></form>
+      <form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="change_password"><label>新しいパスワード<input type="password" name="new_password" autocomplete="new-password" required></label><label>新しいパスワード（確認）<input type="password" name="new_password_confirm" autocomplete="new-password" required></label><button class="button" type="submit">パスワードを変更</button></form>
       <a class="button secondary" href="?logout=1">ログアウト</a>
     </section>
   <?php elseif (isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'student' && $onboardingRequired): ?>
@@ -1415,15 +1481,19 @@ if ($pdo && isset($_SESSION['user_id']) && in_array(($_SESSION['role'] ?? ''), [
         <div id="push-panel" class="push-panel" data-onboarding="1" data-vapid-key="<?= h($config['vapid_public_key'] ?? '') ?>" data-csrf="<?= h($_SESSION['csrf']) ?>"><h3>端末の通知</h3><button id="push-subscribe" class="small-button" type="button" disabled>通知の状態を確認中…</button><p id="push-status" class="muted" role="status">確認中…</p></div>
         <form method="post" class="onboarding-finish"><?= csrf_field() ?><input type="hidden" name="action" value="continue_onboarding_after_push"><button class="button" type="submit">時間割の設定へ進む</button></form>
       <?php elseif ($onboardingStep === 2): ?>
-        <p class="muted">時間割を写真から読み取るか、下の表に入力してください。週ごとに時間割が変わる場合は「時間割は週ごとに変わります」を選べます。</p>
-        <div class="timetable-photo-card"><strong>📷 時間割の写真から取り込む</strong><p>写真を選ぶか撮影し、読み取り結果を確認してから登録します。</p><form method="post" enctype="multipart/form-data" class="image-upload"><?= csrf_field() ?><input type="hidden" name="action" value="parse_timetable"><label>時間割の写真（5MBまで）<input type="file" name="timetable_image" accept="image/jpeg,image/png,image/webp" required></label><button class="small-button" type="submit">写真を読み取る</button></form></div>
-        <form method="post" class="no-timetable-option"><?= csrf_field() ?><input type="hidden" name="action" value="mark_no_timetable"><button class="small-button" type="submit">時間割は週ごとに変わります</button></form>
-        <form method="post" class="timetable-form"><?= csrf_field() ?><input type="hidden" name="action" value="save_timetable"><div class="table-scroll"><table class="timetable"><thead><tr><th>限</th><?php foreach ([1 => '月', 2 => '火', 3 => '水', 4 => '木', 5 => '金', 6 => '土'] as $name): ?><th><?= h($name) ?></th><?php endforeach; ?></tr></thead><tbody><?php for ($period = 1; $period <= 8; $period++): ?><tr><th><?= $period ?></th><?php foreach ([1, 2, 3, 4, 5, 6] as $day): ?><td><input aria-label="<?= $day ?>曜日 <?= $period ?>限" name="subjects[<?= $day ?>][<?= $period ?>]" value="<?= h($timetableDraft[$day][$period] ?? $timetable[$day][$period] ?? '') ?>" maxlength="100"></td><?php endforeach; ?></tr><?php endfor; ?></tbody></table></div><button class="button" type="submit">時間割を保存して次へ</button></form>
+        <p class="muted">時間割の登録方法を選んでください。</p>
+        <div class="onboarding-timetable-choices" id="onboarding-timetable-choices">
+          <button class="small-button" type="button" data-timetable-mode="photo">📷 写真を撮る</button>
+          <button class="small-button" type="button" data-timetable-mode="image">🖼 画像を選ぶ</button>
+          <form method="post" class="no-timetable-option"><?= csrf_field() ?><input type="hidden" name="action" value="mark_no_timetable"><button class="small-button" type="submit">週で変わる</button></form>
+          <form method="post" enctype="multipart/form-data" class="image-upload onboarding-timetable-upload" id="onboarding-timetable-upload" hidden><?= csrf_field() ?><input type="hidden" name="action" value="parse_timetable"><input id="onboarding-timetable-image" type="file" name="timetable_image" accept="image/jpeg,image/png,image/webp" aria-label="時間割の写真または画像を選択" required><p id="onboarding-timetable-file-name" class="muted" role="status"></p><button class="small-button" id="onboarding-timetable-parse" type="submit" hidden>時間割を読み取って入力欄を表示</button></form>
+        </div>
+        <?php if ($timetableDraft || $timetable): ?><p class="muted timetable-result-hint">読み取り結果を確認して、必要なところを直してから次へ進んでください。</p><form method="post" class="timetable-form"><?= csrf_field() ?><input type="hidden" name="action" value="save_timetable"><div class="table-scroll"><table class="timetable"><thead><tr><th>限</th><?php foreach ([1 => '月', 2 => '火', 3 => '水', 4 => '木', 5 => '金', 6 => '土'] as $name): ?><th><?= h($name) ?></th><?php endforeach; ?></tr></thead><tbody><?php for ($period = 1; $period <= 8; $period++): ?><tr><th><?= $period ?></th><?php foreach ([1, 2, 3, 4, 5, 6] as $day): ?><td><input aria-label="<?= $day ?>曜日 <?= $period ?>限" name="subjects[<?= $day ?>][<?= $period ?>]" value="<?= h($timetableDraft[$day][$period] ?? $timetable[$day][$period] ?? '') ?>" maxlength="100"></td><?php endforeach; ?></tr><?php endfor; ?></tbody></table></div><button class="button" type="submit">時間割を保存して次へ</button></form><?php endif; ?>
       <?php elseif ($onboardingStep === 3): ?>
-        <p class="muted">曜日ごとに帰宅後・夜の通知時刻とON/OFFを設定します。夜中の時刻は「翌日」を選びます。空欄にすると通知しません。</p>
+        <p class="muted">曜日ごとに帰宅後・夜の通知時刻とON/OFFを設定します。夜の時刻を0:00〜5:59にすると、翌日の時刻として扱います。空欄にすると通知しません。</p>
         <form method="post" class="notification-form"><?= csrf_field() ?><input type="hidden" name="action" value="save_notifications">
           <div class="notification-copy-tools"><button class="small-button" type="button" data-copy-notification-time="after_school">入力した帰宅後時刻を全曜日にコピー</button><button class="small-button" type="button" data-copy-notification-time="night">入力した夜の時刻を全曜日にコピー</button><p class="muted" role="status" aria-live="polite"></p></div>
-          <table class="notification-schedule"><thead><tr><th>曜日</th><th>帰宅後</th><th>夜</th></tr></thead><tbody><?php foreach ([1 => '月', 2 => '火', 3 => '水', 4 => '木', 5 => '金', 6 => '土', 7 => '日'] as $day => $name): ?><tr><th><?= $name ?></th><?php foreach (['after_school' => 'after_school_time', 'night' => 'night_time'] as $type => $column): ?><?php $row = $notificationSchedule[$day] ?? []; $posted = $_POST['times'][$day][$type] ?? null; $databaseUiTime = notification_time_input_value($row[$column] ?? null); $hasPostedError = ($_POST['action'] ?? '') === 'save_notifications' && $error; $value = $hasPostedError && is_string($posted) ? $posted : ($type === 'night' ? $databaseUiTime['time'] : substr((string)($row[$column] ?? ''), 0, 5)); $nextDay = $hasPostedError ? isset($_POST['night_next_day'][$day]) : $databaseUiTime['next_day']; $enabled = $hasPostedError ? isset($_POST['notification_enabled'][$day][$type]) : (bool)($row[$type . '_enabled'] ?? true); ?><td><div class="notification-time-control"><input type="time" placeholder="22:00" aria-label="<?= $name ?>曜日 <?= $type === 'after_school' ? '帰宅後' : '夜' ?>の時刻" name="times[<?= $day ?>][<?= $type ?>]" value="<?= h($value) ?>"><?php if ($value === ''): ?><span class="time-example">例 22:00</span><?php endif; ?><?php if ($type === 'night'): ?><label class="night-next-day"><input type="checkbox" name="night_next_day[<?= $day ?>]" value="1" <?= $nextDay ? 'checked' : '' ?>><span>翌日</span></label><?php endif; ?></div><label class="notification-toggle"><input type="checkbox" name="notification_enabled[<?= $day ?>][<?= $type ?>]" value="1" <?= $enabled ? 'checked' : '' ?>><span>ON</span></label></td><?php endforeach; ?></tr><?php endforeach; ?></tbody></table><button class="button" type="submit">通知時刻を保存して設定完了</button></form>
+          <table class="notification-schedule"><thead><tr><th>曜日</th><th>帰宅後</th><th>夜</th></tr></thead><tbody><?php foreach ([1 => '月', 2 => '火', 3 => '水', 4 => '木', 5 => '金', 6 => '土', 7 => '日'] as $day => $name): ?><tr><th><?= $name ?></th><?php foreach (['after_school' => 'after_school_time', 'night' => 'night_time'] as $type => $column): ?><?php $row = $notificationSchedule[$day] ?? []; $posted = $_POST['times'][$day][$type] ?? null; $databaseUiTime = notification_time_input_value($row[$column] ?? null); $hasPostedError = ($_POST['action'] ?? '') === 'save_notifications' && $error; $value = $hasPostedError && is_string($posted) ? $posted : ($type === 'night' ? $databaseUiTime['time'] : substr((string)($row[$column] ?? ''), 0, 5)); $enabled = $hasPostedError ? isset($_POST['notification_enabled'][$day][$type]) : (bool)($row[$type . '_enabled'] ?? true); ?><td><div class="notification-time-control"><input type="time" placeholder="22:00" aria-label="<?= $name ?>曜日 <?= $type === 'after_school' ? '帰宅後' : '夜' ?>の時刻" name="times[<?= $day ?>][<?= $type ?>]" value="<?= h($value) ?>"><?php if ($value === ''): ?><span class="time-example">例 22:00</span><?php endif; ?></div><label class="notification-toggle"><input type="checkbox" name="notification_enabled[<?= $day ?>][<?= $type ?>]" value="1" <?= $enabled ? 'checked' : '' ?>><span>ON</span></label></td><?php endforeach; ?></tr><?php endforeach; ?></tbody></table><button class="button" type="submit">通知時刻を保存して設定完了</button></form>
         <p class="muted">通知時刻はあとから「設定」で変更できます。時刻を決めずに進む場合は、下のボタンを使ってください。</p>
         <form method="post" class="onboarding-finish"><?= csrf_field() ?><input type="hidden" name="action" value="complete_onboarding"><button class="button secondary" type="submit">時刻はあとで設定してホームへ</button></form>
       <?php endif; ?>
@@ -1438,11 +1508,9 @@ if ($pdo && isset($_SESSION['user_id']) && in_array(($_SESSION['role'] ?? ''), [
       <form method="post" class="mode-switch-bottom"><?= csrf_field() ?><input type="hidden" name="action" value="set_view_mode"><input type="hidden" name="view_mode" value="student"><button class="small-button" type="submit">生徒モードへ切り替え</button></form>
     </section>
   <?php elseif (isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'student'): ?>
-    <section class="card student-home"><p class="eyebrow">生徒ホーム · <?= h((new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo')))->format('Y年n月j日')) ?></p><h2><?= h($profile['display_name'] ?? '') ?>さん、こんにちは</h2><?php if ($error): ?><p class="error"><?= h($error) ?></p><?php endif; ?><?php if ($notice): ?><p class="success"><?= h($notice) ?></p><?php endif; ?>
+    <section class="card student-home"><section id="push-enable-banner" class="push-enable-banner" hidden><div><strong>Push通知がオフです</strong><p>振り返りの時間をお知らせします。この端末で通知を有効にできます。</p><p id="push-enable-note" class="muted" aria-live="polite"></p></div><button id="push-enable-top" class="button" type="button">Pushを有効にする</button></section><p class="eyebrow">生徒ホーム · <?= h((new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo')))->format('Y年n月j日')) ?></p><h2><?= h($profile['display_name'] ?? '') ?>さん、こんにちは</h2><?php if ($error): ?><p class="error"><?= h($error) ?></p><?php endif; ?><?php if ($notice): ?><p class="success"><?= h($notice) ?></p><?php endif; ?>
       <?php if ($studentSetupStatus): ?><section id="initial-setup-guide" class="initial-setup-guide" data-timetable-ready="<?= $studentSetupStatus['timetable'] ? '1' : '0' ?>" data-notification-times-ready="<?= $studentSetupStatus['notification_times'] ? '1' : '0' ?>" data-push-ready="<?= $studentSetupStatus['push'] ? '1' : '0' ?>" <?= $studentSetupStatus['timetable'] && $studentSetupStatus['notifications'] ? 'hidden' : '' ?>><h3>はじめの設定</h3><p class="muted">まだの項目を設定すると、振り返りをあなたの時間割や通知に合わせられます。設定しなくてもチャットは使えます。</p><div class="setup-guide-items"><div class="setup-guide-item" data-setup-item="timetable" <?= $studentSetupStatus['timetable'] ? 'hidden' : '' ?>><span class="setup-guide-state">未設定</span><strong>時間割</strong><p>学校の教科を登録します。</p><a class="small-button" href="#timetable-settings">時間割を設定</a></div><div class="setup-guide-item" data-setup-item="notifications" <?= $studentSetupStatus['notifications'] ? 'hidden' : '' ?>><span class="setup-guide-state">未設定</span><strong>通知</strong><p>通知時刻とこの端末のPush通知を設定します。許可は通知ボタンを押したときだけ確認します。</p><a class="small-button" href="#notification-settings">通知設定を見る</a><p class="setup-guide-help">iPhoneではホーム画面に追加したまなログから通知を設定できます。対応していない場合や通知が拒否済みの場合は、設定欄に理由と案内を表示します。</p></div></div></section><?php endif; ?>
-      <?php $today = (int)(new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo')))->format('N'); $dayNames = [1 => '月', 2 => '火', 3 => '水', 4 => '木', 5 => '金', 6 => '土']; $todaySubjects = array_filter($timetable[$today] ?? []); ?>
-      <div class="today-box"><strong>今日の時間割（<?= $today <= 6 ? h($dayNames[$today]) . '曜日' : '日曜日' ?>）</strong><p><?php ksort($todaySubjects); echo $timetableUnavailable ? '時間割は週ごとに変わる設定です。帰宅後の振り返りでは1時間目の教科から聞きます。' : ($todaySubjects ? h(implode('・', array_map(fn($period, $subject) => $period . '時間目 ' . $subject, array_keys($todaySubjects), array_values($todaySubjects)))) : '時間割はまだ登録されていません。'); ?></p></div>
-      <?php if ($weeklyReviewPlan): ?><?php render_weekly_review_plan($weeklyReviewPlan); ?><?php endif; ?>
+      <?php $dayNames = [1 => '月', 2 => '火', 3 => '水', 4 => '木', 5 => '金', 6 => '土']; ?>
       <?php if ($activeChatId): ?>
         <section class="chat-panel">
           <div class="chat-heading"><h3 id="chat-title"><?= h($activeChatTitle) ?><?= $subjectProgress ? ' · ' . h($subjectProgress) : '' ?></h3><a href="./">ホーム</a></div>
@@ -1458,8 +1526,9 @@ if ($pdo && isset($_SESSION['user_id']) && in_array(($_SESSION['role'] ?? ''), [
         </section>
       <?php endif; ?>
       <?php if (!$activeChatId): ?>
+        <?php if ($weeklyReviewPlan && !empty($weeklyReviewPlan['items'])): ?><?php render_weekly_review_plan($weeklyReviewPlan); ?><?php endif; ?>
         <section class="review-choices" aria-labelledby="review-choices-title">
-          <div class="review-choices-heading"><h3 id="review-choices-title">今日の学び</h3><p class="muted"><?= $recommendedReview !== null ? '色のついた項目がおすすめです。ほかの項目も選べます。' : '今は好きな項目から始められます。' ?></p></div>
+          <div class="review-choices-heading"><h3 id="review-choices-title">今日の学び</h3></div>
           <div class="review-choice-grid">
             <?php foreach ([
                 ['after_school', 'start_chat', '帰宅後の振り返り', $timetableUnavailable ? 'まず1時間目の教科を教えてね' : '学校で習ったことを思い出そう'],
@@ -1496,7 +1565,7 @@ if ($pdo && isset($_SESSION['user_id']) && in_array(($_SESSION['role'] ?? ''), [
         <?php if ($timetable || $timetableDraft): ?><form method="post" class="delete-timetable-form" onsubmit="return confirm('登録済みの時間割をすべて削除します。よろしいですか？');"><?= csrf_field() ?><input type="hidden" name="action" value="delete_timetable"><button class="button danger-button" type="submit">時間割をすべて削除</button></form><?php endif; ?></details>
       <details class="profile-edit"><summary>質問しない教科</summary><p class="muted">道徳など、振り返りで質問しなくてよい教科を1行に1つ入力してください。時間割の教科名と同じ表記にすると、どの曜日でも質問から外れます。</p><form method="post" class="review-settings"><?= csrf_field() ?><input type="hidden" name="action" value="save_review_exclusions"><label for="excluded-subjects">質問しない教科</label><textarea id="excluded-subjects" name="excluded_subjects" rows="4" maxlength="5000" placeholder="道徳&#10;学活"><?= h(($_POST['action'] ?? '') === 'save_review_exclusions' && $error ? ($_POST['excluded_subjects'] ?? '') : implode("\n", $reviewExcludedSubjects)) ?></textarea><button class="button" type="submit">設定を保存</button></form></details>
       <details class="profile-edit" id="notification-settings"><summary>通知希望時刻・Push通知</summary>
-        <p class="muted">曜日ごとに時刻とON/OFFを設定できます。夜中の時刻は「翌日」を選択します（例：水曜の翌日1:00は木曜午前1時）。入力した時刻は同じ種類の全曜日へコピーできます。</p>
+        <p class="muted">曜日ごとに時刻とON/OFFを設定できます。夜の時刻を0:00〜5:59にすると、翌日の時刻として扱います。入力した時刻は同じ種類の全曜日へコピーできます。</p>
         <form method="post" class="notification-form"><?= csrf_field() ?><input type="hidden" name="action" value="save_notifications">
           <label class="pause-control"><input type="checkbox" name="notifications_paused" value="1" <?= (($_POST['action'] ?? '') === 'save_notifications' && $error ? isset($_POST['notifications_paused']) : $notificationsPaused) ? 'checked' : '' ?>>通知を一時停止する</label>
           <?php $weeklyPosted = ($_POST['action'] ?? '') === 'save_notifications' && $error; ?>
@@ -1506,8 +1575,8 @@ if ($pdo && isset($_SESSION['user_id']) && in_array(($_SESSION['role'] ?? ''), [
             <?php foreach ([1 => '月', 2 => '火', 3 => '水', 4 => '木', 5 => '金', 6 => '土', 7 => '日'] as $day => $name): ?>
               <tr><th scope="row"><?= $name ?></th>
                 <?php foreach (['after_school' => 'after_school_time', 'night' => 'night_time'] as $type => $column): ?>
-                  <?php $postedTime = $_POST['times'][$day][$type] ?? null; $row = $notificationSchedule[$day] ?? []; $databaseUiTime = notification_time_input_value($row[$column] ?? null); $hasPostedError = ($_POST['action'] ?? '') === 'save_notifications' && $error; $timeValue = $hasPostedError && is_string($postedTime) ? $postedTime : ($type === 'night' ? $databaseUiTime['time'] : substr((string)($row[$column] ?? ''), 0, 5)); $nextDay = $hasPostedError ? isset($_POST['night_next_day'][$day]) : $databaseUiTime['next_day']; $dayEnabled = $hasPostedError ? isset($_POST['notification_enabled'][$day][$type]) : (bool)($row[$type . '_enabled'] ?? true); ?>
-                  <td><div class="notification-time-control"><input type="time" placeholder="22:00" aria-label="<?= $name ?>曜日 <?= $type === 'after_school' ? '帰宅後' : '夜' ?>の時刻" name="times[<?= $day ?>][<?= $type ?>]" value="<?= h($timeValue) ?>"><?php if ($timeValue === ''): ?><span class="time-example">例 22:00</span><?php endif; ?><?php if ($type === 'night'): ?><label class="night-next-day"><input type="checkbox" name="night_next_day[<?= $day ?>]" value="1" <?= $nextDay ? 'checked' : '' ?>><span>翌日</span></label><?php endif; ?></div><label class="notification-toggle"><input type="checkbox" aria-label="<?= $name ?>曜日 <?= $type === 'after_school' ? '帰宅後' : '夜' ?>の通知をONにする" name="notification_enabled[<?= $day ?>][<?= $type ?>]" value="1" <?= $dayEnabled ? 'checked' : '' ?>><span>ON</span></label></td>
+                  <?php $postedTime = $_POST['times'][$day][$type] ?? null; $row = $notificationSchedule[$day] ?? []; $databaseUiTime = notification_time_input_value($row[$column] ?? null); $hasPostedError = ($_POST['action'] ?? '') === 'save_notifications' && $error; $timeValue = $hasPostedError && is_string($postedTime) ? $postedTime : ($type === 'night' ? $databaseUiTime['time'] : substr((string)($row[$column] ?? ''), 0, 5)); $dayEnabled = $hasPostedError ? isset($_POST['notification_enabled'][$day][$type]) : (bool)($row[$type . '_enabled'] ?? true); ?>
+                  <td><div class="notification-time-control"><input type="time" placeholder="22:00" aria-label="<?= $name ?>曜日 <?= $type === 'after_school' ? '帰宅後' : '夜' ?>の時刻" name="times[<?= $day ?>][<?= $type ?>]" value="<?= h($timeValue) ?>"><?php if ($timeValue === ''): ?><span class="time-example">例 22:00</span><?php endif; ?></div><label class="notification-toggle"><input type="checkbox" aria-label="<?= $name ?>曜日 <?= $type === 'after_school' ? '帰宅後' : '夜' ?>の通知をONにする" name="notification_enabled[<?= $day ?>][<?= $type ?>]" value="1" <?= $dayEnabled ? 'checked' : '' ?>><span>ON</span></label></td>
                 <?php endforeach; ?>
               </tr>
             <?php endforeach; ?>
@@ -1533,4 +1602,4 @@ if ($pdo && isset($_SESSION['user_id']) && in_array(($_SESSION['role'] ?? ''), [
     </section>
   <?php endif; ?>
   <footer>石渡塾 学習記録</footer>
-</main><script src="assets/app.js?v=20261020-processing" defer></script><script src="assets/notification-settings.js?v=20261027-copy-source" defer></script><script src="assets/setup-guide.js?v=20261021-setup-guide" defer></script><script src="assets/push.js?v=20261021-setup-guide" defer></script><?php if ($onboardingRequired): ?><script src="assets/onboarding.js?v=20261021-notifications-first" defer></script><?php endif; ?></body></html>
+</main><script src="assets/app.js?v=20261020-processing" defer></script><script src="assets/notification-settings.js?v=20261101-auto-next-day" defer></script><script src="assets/setup-guide.js?v=20261021-setup-guide" defer></script><script src="assets/push.js?v=20261102-top-banner" defer></script><?php if ($onboardingRequired): ?><script src="assets/onboarding.js?v=20261101-timetable-choices-v2" defer></script><?php endif; ?></body></html>

@@ -2,7 +2,17 @@
 declare(strict_types=1);
 
 function review_subject_question(int $period, string $subject): string {
+    if ($subject === '__pending_subject__') return $period . '時間目は何の教科だった？ 授業がなかった場合も教えてね。';
     return $period . '時間目の' . $subject . 'は、何を勉強した？';
+}
+
+/** Subjects that do not need a school-learning record in a cram-school log. */
+function review_subject_is_non_core(string $subject): bool {
+    $normalized = preg_replace('/[\s　・（）()]/u', '', mb_convert_kana(trim($subject), 'asKV')) ?? trim($subject);
+    foreach (['体育', '保健体育', '図工', '美術', '技術', '音楽', '家庭科', '家庭'] as $keyword) {
+        if (str_contains($normalized, $keyword)) return true;
+    }
+    return false;
 }
 
 /** Create one durable conversation per student, school day, and review type. */
@@ -48,10 +58,17 @@ function daily_review_session(PDO $pdo, int $studentId, string $reviewDate, stri
                 $stmt = $pdo->prepare('SELECT subject FROM review_excluded_subjects WHERE student_id = ?');
                 $stmt->execute([$studentId]);
                 $excluded = array_fill_keys($stmt->fetchAll(PDO::FETCH_COLUMN), true);
-                $subjects = array_values(array_filter($scheduled, static fn($subject) => !isset($excluded[$subject['subject']])));
+                $subjects = array_values(array_filter($scheduled, static fn($subject) => !isset($excluded[$subject['subject']]) && !review_subject_is_non_core((string)$subject['subject'])));
                 if ($scheduled && !$subjects) {
                     $pdo->commit();
                     return null;
+                }
+                if ($timetableUnavailable) {
+                    // With a changing timetable, ask period by period and let the student
+                    // supply each subject. Eight slots cover the app's maximum school day.
+                    for ($period = 1; $period <= 8; $period++) {
+                        $subjects[] = ['period_number' => $period, 'subject' => '__pending_subject__'];
+                    }
                 }
             }
 
@@ -65,7 +82,7 @@ function daily_review_session(PDO $pdo, int $studentId, string $reviewDate, stri
             }
             $opening = $type === 'night'
                 ? '今日、家でどんな勉強をした？ していなければ、そのまま教えてね。'
-                : ($subjects ? review_subject_question((int)$subjects[0]['period_number'], (string)$subjects[0]['subject']) : ($timetableUnavailable ? '1時間目は何の教科だった？' : '今日は学校で何を勉強した？'));
+                : ($subjects ? review_subject_question((int)$subjects[0]['period_number'], (string)$subjects[0]['subject']) : '今日は学校で何を勉強した？');
             $stmt = $pdo->prepare("INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'assistant', ?)");
             $stmt->execute([$sessionId, $opening]);
         }

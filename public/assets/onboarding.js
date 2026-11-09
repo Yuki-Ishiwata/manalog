@@ -1,4 +1,30 @@
 (() => {
+  const timetableChoices = document.getElementById('onboarding-timetable-choices');
+  if (timetableChoices) {
+    const uploadForm = document.getElementById('onboarding-timetable-upload');
+    const imageInput = document.getElementById('onboarding-timetable-image');
+    const fileName = document.getElementById('onboarding-timetable-file-name');
+    const parseButton = document.getElementById('onboarding-timetable-parse');
+    timetableChoices.querySelectorAll('[data-timetable-mode]').forEach((choice) => {
+      choice.addEventListener('click', () => {
+        if (!uploadForm || !imageInput || !fileName || !parseButton) return;
+        const useCamera = choice.dataset.timetableMode === 'photo';
+        uploadForm.hidden = false;
+        imageInput.value = '';
+        if (useCamera) imageInput.setAttribute('capture', 'environment');
+        else imageInput.removeAttribute('capture');
+        fileName.textContent = '選んだ写真・画像はここに表示されます。';
+        parseButton.hidden = true;
+        imageInput.click();
+      });
+    });
+    imageInput?.addEventListener('change', () => {
+      const file = imageInput.files?.[0];
+      if (fileName) fileName.textContent = file ? `選択中：${file.name}` : '写真・画像が選択されていません。上のボタンから選び直してください。';
+      if (parseButton) parseButton.hidden = !file;
+    });
+  }
+
   const panel = document.getElementById('install-panel');
   if (!panel) return;
   const status = document.getElementById('install-status');

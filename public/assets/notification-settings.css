@@ -7,6 +7,32 @@
   line-height: 1.4;
 }
 
+.push-enable-banner:not([hidden]) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 0 18px;
+  padding: 14px;
+  border: 1px solid #a9c9af;
+  border-radius: 14px;
+  background: #edf6ef;
+}
+
+.push-enable-banner strong {
+  color: #315d40;
+}
+
+.push-enable-banner p {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+.push-enable-banner .button {
+  flex: 0 0 auto;
+  min-height: 44px;
+}
+
 .timetable-photo-card {
   margin: 12px 0;
   padding: 14px;
@@ -29,6 +55,60 @@
   margin: 10px 0 0;
 }
 
+.onboarding-timetable-choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  margin: 16px 0;
+}
+
+.onboarding-timetable-choices > button,
+.onboarding-timetable-choices .no-timetable-option .small-button {
+  min-height: 52px;
+  font-size: 14px;
+}
+
+.onboarding-timetable-choices .no-timetable-option {
+  margin: 0;
+}
+
+.onboarding-timetable-upload:not([hidden]) {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  padding: 14px;
+  border: 1px solid #cbd9ce;
+  border-radius: 14px;
+  background: #f4f8f4;
+}
+
+.onboarding-timetable-upload input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+  border: 0;
+}
+
+.onboarding-timetable-upload .muted,
+.timetable-result-hint {
+  margin: 0;
+  font-size: 13px;
+}
+
+.onboarding-timetable-upload #onboarding-timetable-file-name:empty {
+  display: none;
+}
+
+.onboarding-timetable-upload #onboarding-timetable-parse {
+  min-height: 48px;
+  font-size: 14px;
+}
+
 .no-timetable-option {
   margin: 12px 0 0;
 }
@@ -46,25 +126,6 @@
   color: #718078;
   font-size: 10px;
   line-height: 1.2;
-}
-
-.notification-time-control .night-next-day {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  margin: 0;
-  color: #52655a;
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.notification-time-control .night-next-day input {
-  width: 18px;
-  height: 18px;
-  flex: 0 0 18px;
-  margin: 0;
-  padding: 0;
 }
 
 .weekly-notification-settings .weekly-review-toggle input {
@@ -100,6 +161,11 @@
 }
 
 @media (max-width: 420px) {
+  .push-enable-banner:not([hidden]) {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .weekly-notification-settings {
     grid-template-columns: 1fr;
   }
@@ -111,5 +177,13 @@
 
   .notification-copy-tools {
     grid-template-columns: 1fr;
+  }
+
+  .onboarding-timetable-choices {
+    grid-template-columns: 1fr;
+  }
+
+  .onboarding-timetable-upload:not([hidden]) {
+    grid-column: 1;
   }
 }
